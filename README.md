@@ -40,7 +40,7 @@ bash setup.sh
 source env/bin/activate
 ```
 
-`setup.sh` creates a Python 3.9+ virtual environment, installs all dependencies, and generates the per-scene scenario files. Subject data (`.state.gz` files) is stored in `data/mario.scenes` via git-annex:
+`setup.sh` creates a Python 3.9+ virtual environment, installs all dependencies, and generates the per-scene scenario files. Subject data (`.state` files) is stored in `data/mario.scenes` via git-annex:
 
 ```bash
 # Pull data for all subjects
@@ -138,7 +138,7 @@ MariHA/
 
 ## Key Design Choices
 
-**Human-aligned curriculum.** Each episode uses the exact emulator state (`.state.gz`) from a human player's clip, placing the agent at the same starting position with the same game state. This grounds the benchmark in real human play rather than arbitrary level resets.
+**Human-aligned curriculum.** Each episode uses the exact emulator state (`.state`) from a human player's clip, placing the agent at the same starting position with the same game state. This grounds the benchmark in real human play rather than arbitrary level resets.
 
 **Two-input architecture.** The actor and critic take the pixel observation `(84, 84, 4)` and the task one-hot vector as *separate* inputs. The CNN processes pixels; the task ID conditions the dense trunk. This follows the [COOM](https://arxiv.org/abs/2303.13002) convention and enables multi-head outputs for task-specific policies.
 
@@ -189,8 +189,8 @@ MariHA extends COOM with:
 If you use MariHA in your research, please cite:
 
 ```bibtex
-@misc{mariha2024,
+@misc{mariha2026,
   title   = {MariHA: A Continual Reinforcement Learning Benchmark for Human-AI Alignment on Super Mario Bros},
-  year    = {2024},
+  year    = {2026},
 }
 ```
