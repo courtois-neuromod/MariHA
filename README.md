@@ -9,6 +9,14 @@
 
 In MariHA, agents are trained on a human-derived curriculum — a sequence of short gameplay clips recorded from real players — and must progressively learn to clear scenes that the human subjects encountered during their sessions. The benchmark measures not only raw performance but also how well agents *retain* past skills and *transfer* knowledge to new scenes.
 
+
+📄 **Paper**: [MariHA on OpenReview](https://openreview.net/forum?id=YAVB439L9X)
+
+<p align="center">
+  <img src="assets/gifs/mario_demo1.gif" alt="Mario Demo 1" style="vertical-align: top;"/>
+  <img src="assets/gifs/mario_demo2.gif" alt="Mario Demo 2" style="vertical-align: top;"/>
+</p>
+
 ---
 
 ## Overview
