@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mariha"
+version = "0.1.0"
+description = "MariHA: A Continual Reinforcement Learning benchmark for Human-AI alignment on Super Mario Bros."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+dependencies = [
+    "tensorflow>=2.13",
+    "tf_keras>=2.13",              # Keras 2 compatibility shim for TF >= 2.16
+    "tensorflow-probability>=0.21",
+    "gymnasium>=0.29",
+    "stable-retro>=0.9.2",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "tensorboard>=2.13",
+    "opencv-python-headless>=4.8",  # grayscale + resize wrappers
+    "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+wandb = [
+    "wandb>=0.16",
+]
+dashboard = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+docs = [
+    "sphinx>=7.2",
+    "furo>=2024.1.29",
+    "sphinx-autodoc-typehints>=1.25",
+    "sphinx-copybutton>=0.5",
+    "myst-parser>=2.0",
+]
+dev = [
+    "pytest>=7.4",
+    "black>=23.0",
+    "mypy>=1.5",
+]
+
+[project.scripts]
+mariha-generate-scenarios = "scripts.generate_scenarios:main"
+mariha-run-single = "scripts.run_single:main"
+mariha-run-cl = "scripts.run_cl:main"
+mariha-evaluate = "scripts.evaluate:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mariha*", "scripts*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true

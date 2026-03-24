@@ -1,0 +1,122 @@
+Getting Started
+===============
+
+Requirements
+------------
+
+* Python 3.9+
+* The ``mario.scenes`` dataset (git-annex / DataLad)
+* CUDA-capable GPU recommended for training (CPU works but is slow)
+
+Installation
+------------
+
+Clone the repository and run the setup script:
+
+.. code-block:: bash
+
+   git clone https://github.com/courtois-neuromod/mariha MariHA
+   cd MariHA
+   bash setup.sh
+   source env/bin/activate
+
+``setup.sh`` will:
+
+1. Create a virtual environment at ``env/``
+2. Install the package and all dependencies (including ``tf_keras`` for
+   TensorFlow ≥ 2.16 compatibility)
+3. Generate the per-scene ``scenario.json`` files
+4. Smoke-test the installation
+
+Pulling the dataset
+-------------------
+
+Subject gameplay data is stored in ``data/mario.scenes`` as a
+`DataLad <https://www.datalad.org>`_ / git-annex dataset:
+
+.. code-block:: bash
+
+   # All subjects
+   cd data/mario.scenes && git annex get sub-*/
+
+   # Single subject
+   cd data/mario.scenes && git annex get sub-01/
+
+Each subject's data contains ``.state.gz`` files — compressed emulator
+snapshots that place Mario at exactly the position and game state a human
+player was at during a recorded clip.
+
+Training — full CL curriculum
+------------------------------
+
+.. code-block:: bash
+
+   mariha-run-cl \
+     --subject    sub-01 \
+     --cl_method  ewc \
+     --seed       0
+
+This trains the agent on the full ordered sequence of scenes from subject
+``sub-01``'s play history.  Checkpoints are saved to
+``experiments/checkpoints/ewc/``.
+
+Key training arguments:
+
+.. list-table::
+   :widths: 25 15 60
+   :header-rows: 1
+
+   * - Argument
+     - Default
+     - Description
+   * - ``--subject``
+     - *(required)*
+     - Subject ID: ``sub-01``, ``sub-02``, ``sub-03``, ``sub-05``, ``sub-06``
+   * - ``--cl_method``
+     - ``None``
+     - CL baseline name (see :doc:`cl_methods`).  ``None`` = vanilla SAC.
+   * - ``--seed``
+     - ``0``
+     - Global random seed.
+   * - ``--batch_size``
+     - ``128``
+     - Replay-buffer mini-batch size.
+   * - ``--replay_size``
+     - ``100000``
+     - Replay buffer capacity.
+   * - ``--lr``
+     - ``1e-3``
+     - Initial learning rate.
+   * - ``--n_updates``
+     - ``50``
+     - Gradient steps per update round.
+
+Training — single scene (debugging)
+-------------------------------------
+
+.. code-block:: bash
+
+   mariha-run-single --scene_id w1l1s0 --seed 0
+
+Evaluation
+----------
+
+After training, evaluate the saved checkpoints:
+
+.. code-block:: bash
+
+   mariha-evaluate \
+     --subject     sub-01 \
+     --cl_method   ewc \
+     --run_prefix  20240322_120000_seed0 \
+     --n_episodes  5 \
+     --eval_diagonal
+
+The ``--eval_diagonal`` flag loads the per-task checkpoint for each scene
+and evaluates it on that scene, enabling BWT and forgetting computation.
+Without it, only the final checkpoint is used (faster).
+
+Results are saved to
+``experiments/sub-01/ewc/20240322_120000_seed0/eval_results.json``.
+
+See :doc:`evaluation` for a full description of all reported metrics.

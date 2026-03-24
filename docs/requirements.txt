@@ -1,0 +1,5 @@
+sphinx>=7.2
+furo>=2024.1.29
+sphinx-autodoc-typehints>=1.25
+sphinx-copybutton>=0.5
+myst-parser>=2.0        # enables Markdown in Sphinx if needed later
