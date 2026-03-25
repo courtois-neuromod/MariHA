@@ -23,6 +23,7 @@ Key differences from COOM:
 
 from __future__ import annotations
 
+import argparse
 import os
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ except ImportError:
 
 from tensorflow_probability.python.distributions import Categorical
 
+from mariha.benchmark.agent import BenchmarkAgent
 from mariha.replay.buffers import (
     BufferType,
     EpisodicMemory,
@@ -59,7 +61,7 @@ from mariha.utils.running import (
 )
 
 
-class SAC:
+class SAC(BenchmarkAgent):
     """Soft Actor-Critic for continual learning on the MariHA benchmark.
 
     After construction, call ``run()`` to begin training.
@@ -282,9 +284,11 @@ class SAC:
     def on_test_end(self, seq_idx: Union[tf.Tensor, int]) -> None:
         pass
 
-    def on_task_start(self, current_task_idx: int) -> None:
-        scene_id = self.scene_ids[current_task_idx] if current_task_idx < len(self.scene_ids) else "?"
-        self.logger.log(f"Task start: idx={current_task_idx}  scene={scene_id}", color="white")
+    def on_task_start(self, current_task_idx: int, scene_id: str = "") -> None:
+        _scene = scene_id or (
+            self.scene_ids[current_task_idx] if current_task_idx < len(self.scene_ids) else "?"
+        )
+        self.logger.log(f"Task start: idx={current_task_idx}  scene={_scene}", color="white")
 
     def on_task_end(self, current_task_idx: int) -> None:
         self.logger.log(f"Task end:   idx={current_task_idx}", color="white")
@@ -307,13 +311,13 @@ class SAC:
         )
 
     @tf.function
-    def get_action(
+    def _get_action_tf(
         self,
         obs: tf.Tensor,
         one_hot_task_id: tf.Tensor,
         deterministic: tf.Tensor = tf.constant(False),
     ) -> tf.Tensor:
-        """Sample (or greedily select) an action from the current policy."""
+        """TF-compiled action selection from the current policy."""
         logits = self.actor(
             tf.expand_dims(obs, 0), tf.expand_dims(one_hot_task_id, 0)
         )
@@ -331,12 +335,21 @@ class SAC:
         deterministic: bool = False,
     ) -> int:
         """Convenience wrapper: return a numpy int action."""
-        action = self.get_action(
+        action = self._get_action_tf(
             tf.convert_to_tensor(obs),
             tf.convert_to_tensor(one_hot, dtype=tf.float32),
             tf.constant(deterministic),
         )
         return int(action.numpy()[0])
+
+    def get_action(
+        self,
+        obs: np.ndarray,
+        task_one_hot: np.ndarray,
+        deterministic: bool = False,
+    ) -> int:
+        """BenchmarkAgent interface: select an action (numpy in, int out)."""
+        return self.get_action_numpy(obs, task_one_hot, deterministic)
 
     # ------------------------------------------------------------------
     # Gradient computation
@@ -577,6 +590,172 @@ class SAC:
         self.target_critic1.load_weights(os.path.join(model_dir, "target_critic1"))
         self.critic2.load_weights(os.path.join(model_dir, "critic2"))
         self.target_critic2.load_weights(os.path.join(model_dir, "target_critic2"))
+
+    # BenchmarkAgent checkpoint interface (delegates to save_model/load_model)
+
+    def save_checkpoint(self, directory: Path) -> None:
+        """BenchmarkAgent interface: save weights to ``directory``."""
+        self.save_model(str(directory))
+
+    def load_checkpoint(self, directory: Path) -> None:
+        """BenchmarkAgent interface: load weights from ``directory``."""
+        self.load_model(str(directory))
+
+    # ------------------------------------------------------------------
+    # BenchmarkAgent config interface
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_args(cls, parser: argparse.ArgumentParser) -> None:
+        """Add SAC and CL-method hyperparameters to ``parser``."""
+        from mariha.replay.buffers import BufferType
+        from mariha.utils.running import float_or_str, sci2int, str2bool
+
+        # CL method selection (None = vanilla SAC)
+        parser.add_argument(
+            "--cl_method", type=str, default=None,
+            choices=[None, "l2", "ewc", "mas", "si", "owl", "packnet",
+                     "agem", "vcl", "der", "clonex", "multitask"],
+            help="Continual learning method (None = vanilla SAC).",
+        )
+
+        # SAC core
+        parser.add_argument("--gamma", type=float, default=0.99)
+        parser.add_argument("--polyak", type=float, default=0.995)
+        parser.add_argument("--lr", type=float, default=1e-3)
+        parser.add_argument("--lr_decay", type=str, default=None,
+                            choices=[None, "exponential", "linear"])
+        parser.add_argument("--lr_decay_rate", type=float, default=0.1)
+        parser.add_argument("--alpha", type=float_or_str, default="auto",
+                            help="Entropy coefficient ('auto' for automatic tuning).")
+        parser.add_argument("--batch_size", type=int, default=128)
+        parser.add_argument("--replay_size", type=sci2int, default=int(1e5))
+        parser.add_argument("--start_steps", type=sci2int, default=10_000)
+        parser.add_argument("--update_after", type=sci2int, default=5_000)
+        parser.add_argument("--update_every", type=int, default=50)
+        parser.add_argument("--n_updates", type=int, default=50)
+        parser.add_argument("--clipnorm", type=float, default=None)
+
+        # Network architecture
+        parser.add_argument("--hidden_sizes", type=int, nargs="+", default=[256, 256])
+        parser.add_argument("--activation", type=str, default="tanh",
+                            choices=["tanh", "relu", "elu", "lrelu"])
+        parser.add_argument("--use_layer_norm", type=str2bool, default=False)
+        parser.add_argument("--num_heads", type=int, default=1)
+        parser.add_argument("--hide_task_id", type=str2bool, default=False)
+
+        # Replay buffer
+        parser.add_argument("--buffer_type", type=str, default="fifo",
+                            choices=[bt.value for bt in BufferType])
+
+        # Task-change behaviour
+        parser.add_argument("--reset_buffer_on_task_change", type=str2bool, default=True)
+        parser.add_argument("--reset_optimizer_on_task_change", type=str2bool, default=False)
+        parser.add_argument("--reset_actor_on_task_change", type=str2bool, default=False)
+        parser.add_argument("--reset_critic_on_task_change", type=str2bool, default=False)
+        parser.add_argument("--agent_policy_exploration", type=str2bool, default=False)
+
+        # Logging
+        parser.add_argument("--log_every", type=sci2int, default=1000)
+        parser.add_argument("--save_freq_epochs", type=int, default=25)
+        parser.add_argument("--scene_id", type=str, default=None,
+                            help="(run_single only) Single scene ID to train on.")
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace, env, logger, scene_ids: list) -> "SAC":
+        """Construct a SAC (or CL-method subclass) from parsed CLI args.
+
+        Dispatches on ``args.cl_method`` to instantiate the correct subclass.
+        All SAC-based CL methods inherit this classmethod and are instantiated
+        here rather than each implementing their own ``from_args``.
+        """
+        from mariha.rl import models
+        from mariha.replay.buffers import BufferType
+        from mariha.utils.running import get_activation_from_str, get_readable_timestamp
+
+        activation = get_activation_from_str(getattr(args, "activation", "tanh"))
+        policy_kwargs = dict(
+            hidden_sizes=tuple(getattr(args, "hidden_sizes", [256, 256])),
+            activation=activation,
+            use_layer_norm=getattr(args, "use_layer_norm", False),
+            num_heads=getattr(args, "num_heads", 1),
+            hide_task_id=getattr(args, "hide_task_id", False),
+        )
+
+        experiment_dir = Path(getattr(args, "experiment_dir", "experiments"))
+        timestamp = get_readable_timestamp()
+
+        sac_kwargs = dict(
+            env=env,
+            logger=logger,
+            scene_ids=scene_ids,
+            cl_method=getattr(args, "cl_method", None),
+            policy_kwargs=policy_kwargs,
+            seed=getattr(args, "seed", 0),
+            log_every=getattr(args, "log_every", 1000),
+            replay_size=getattr(args, "replay_size", int(1e5)),
+            gamma=getattr(args, "gamma", 0.99),
+            polyak=getattr(args, "polyak", 0.995),
+            lr=getattr(args, "lr", 1e-3),
+            lr_decay=getattr(args, "lr_decay", None),
+            lr_decay_rate=getattr(args, "lr_decay_rate", 0.1),
+            alpha=getattr(args, "alpha", "auto"),
+            batch_size=getattr(args, "batch_size", 128),
+            start_steps=getattr(args, "start_steps", 10_000),
+            update_after=getattr(args, "update_after", 5_000),
+            update_every=getattr(args, "update_every", 50),
+            n_updates=getattr(args, "n_updates", 50),
+            save_freq_epochs=getattr(args, "save_freq_epochs", 25),
+            reset_buffer_on_task_change=getattr(args, "reset_buffer_on_task_change", True),
+            buffer_type=BufferType(getattr(args, "buffer_type", "fifo")),
+            reset_optimizer_on_task_change=getattr(args, "reset_optimizer_on_task_change", False),
+            reset_actor_on_task_change=getattr(args, "reset_actor_on_task_change", False),
+            reset_critic_on_task_change=getattr(args, "reset_critic_on_task_change", False),
+            clipnorm=getattr(args, "clipnorm", None),
+            agent_policy_exploration=getattr(args, "agent_policy_exploration", False),
+            experiment_dir=experiment_dir,
+            timestamp=timestamp,
+        )
+
+        cl_method = getattr(args, "cl_method", None)
+        if cl_method is None:
+            return cls(**sac_kwargs)
+
+        method = cl_method.lower()
+        if method == "l2":
+            from mariha.methods.l2 import L2_SAC
+            return L2_SAC(**sac_kwargs)
+        if method == "ewc":
+            from mariha.methods.ewc import EWC_SAC
+            return EWC_SAC(**sac_kwargs)
+        if method == "mas":
+            from mariha.methods.mas import MAS_SAC
+            return MAS_SAC(**sac_kwargs)
+        if method == "si":
+            from mariha.methods.si import SI_SAC
+            return SI_SAC(**sac_kwargs)
+        if method == "owl":
+            from mariha.methods.owl import OWL_SAC
+            return OWL_SAC(**sac_kwargs)
+        if method == "packnet":
+            from mariha.methods.packnet import PackNet_SAC
+            return PackNet_SAC(**sac_kwargs)
+        if method == "agem":
+            from mariha.methods.agem import AGEM_SAC
+            return AGEM_SAC(**sac_kwargs)
+        if method == "vcl":
+            from mariha.methods.vcl import VCL_SAC
+            return VCL_SAC(**sac_kwargs)
+        if method in ("der", "der++"):
+            from mariha.methods.der import DER_SAC
+            return DER_SAC(**sac_kwargs)
+        if method == "clonex":
+            from mariha.methods.clonex import ClonEx_SAC
+            return ClonEx_SAC(**sac_kwargs)
+        if method == "multitask":
+            from mariha.methods.multitask import MultiTask_SAC
+            return MultiTask_SAC(**sac_kwargs)
+        raise ValueError(f"Unknown cl_method: '{cl_method}'")
 
     # ------------------------------------------------------------------
     # Main training loop

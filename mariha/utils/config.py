@@ -4,6 +4,12 @@ Provides ``build_parser()`` which returns an ``argparse.ArgumentParser``
 pre-configured with all SAC and CL hyperparameters.  Individual scripts call
 ``parser.parse_args()`` and forward the resulting namespace to the SAC
 constructor and logger.
+
+.. deprecated::
+    ``build_parser()`` is kept for backwards compatibility with
+    ``run_single.py`` and any external code.  New scripts should use
+    :func:`mariha.benchmark.config.build_benchmark_parser` for benchmark-level
+    flags and :meth:`mariha.rl.sac.SAC.add_args` for SAC-specific flags.
 """
 
 from __future__ import annotations
@@ -16,6 +22,9 @@ from mariha.utils.running import float_or_str, get_activation_from_str, sci2int,
 
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser shared by ``run_single.py`` and ``run_cl.py``.
+
+    Composes the benchmark-level parser with all SAC-specific flags so that
+    existing code calling ``build_parser()`` continues to work unchanged.
 
     Returns:
         Configured ``argparse.ArgumentParser``.

@@ -1,4 +1,4 @@
-"""Evaluation runner: execute a trained SAC agent on a single scene.
+"""Evaluation runner: execute a trained agent on a single scene.
 
 ``eval_on_scene`` runs the agent's deterministic (greedy) policy for
 ``n_episodes`` and returns the mean cumulative return plus per-episode
@@ -6,6 +6,9 @@ behavioral statistics (``EpisodeStats``).
 
 The eval env is built via ``make_scene_env`` from the same wrapper pipeline
 used during training, so observations and action spaces are identical.
+
+The ``agent`` argument accepts any ``BenchmarkAgent`` implementation —
+SAC, DDQN, PPO, MuZero, RandomAgent, or any custom algorithm.
 """
 
 from __future__ import annotations
@@ -54,7 +57,7 @@ def eval_on_scene(
     """Run the greedy policy on a single scene.
 
     Args:
-        agent: A trained :class:`~mariha.rl.sac.SAC` instance (or subclass).
+        agent: A :class:`~mariha.benchmark.agent.BenchmarkAgent` instance.
         scene_id: Scene identifier, e.g. ``'w1l1s0'``.
         eval_spec: An :class:`~mariha.curriculum.episode.EpisodeSpec`
             describing the starting state file and step budget.
@@ -94,7 +97,7 @@ def eval_on_scene(
             done = False
 
             while not done:
-                action = agent.get_action_numpy(obs, one_hot, deterministic=True)
+                action = agent.get_action(obs, one_hot, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
                 ep_return += reward
                 done = terminated or truncated

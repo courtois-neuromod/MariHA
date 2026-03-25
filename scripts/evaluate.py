@@ -60,12 +60,9 @@ from mariha.eval.metrics import (
     summarise_behavioral_metrics,
 )
 from mariha.eval.runner import eval_on_scene, find_task_checkpoints
-from mariha.replay.buffers import BufferType
-from mariha.rl import models
-from mariha.rl.sac import SAC
-from mariha.utils.config import build_parser as _build_train_parser
+import mariha.rl  # noqa: F401 — registers all built-in algorithms
+from mariha.benchmark.registry import get_agent_class
 from mariha.utils.logging import EpochLogger
-from mariha.utils.running import get_activation_from_str
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,7 +78,17 @@ def build_eval_parser() -> argparse.ArgumentParser:
         description="Evaluate a trained MariHA agent on its training scenes."
     )
     p.add_argument("--subject", required=True, help="Subject ID, e.g. sub-01.")
-    p.add_argument("--cl_method", default=None, help="CL method name (or None for SAC).")
+    p.add_argument(
+        "--algorithm",
+        default="sac",
+        help="Algorithm name (from registry). Replaces --cl_method.",
+    )
+    p.add_argument(
+        "--cl_method",
+        default=None,
+        help="Deprecated: use --algorithm instead. "
+             "If provided, overrides --algorithm for backwards compatibility.",
+    )
     p.add_argument(
         "--run_prefix",
         required=True,
@@ -112,6 +119,7 @@ def build_eval_parser() -> argparse.ArgumentParser:
         help="Evaluate only the first N scenes (for quick debugging).",
     )
     p.add_argument("--seed", type=int, default=0)
+    # SAC-specific network flags kept for backwards compat; ignored by other algorithms
     p.add_argument("--hidden_sizes", nargs="+", type=int, default=[256, 256])
     p.add_argument("--activation", default="tanh")
     p.add_argument("--use_layer_norm", action="store_true")
@@ -127,57 +135,19 @@ def build_eval_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Agent construction (minimal — no env needed for pure forward pass)
+# Agent construction via registry
 # ---------------------------------------------------------------------------
 
 
-def _build_eval_agent(
-    cl_method: str | None,
-    checkpoint_dir: Path,
-    env,
-    scene_ids,
-    policy_kwargs: dict,
-) -> SAC:
-    """Instantiate an agent and load weights from a checkpoint directory."""
-    sac_kwargs = dict(
-        env=env,
-        logger=EpochLogger(output_dir="/tmp/mariha_eval_tmp", logger_output=["stdout"]),
-        scene_ids=scene_ids,
-        cl_method=cl_method,
-        policy_kwargs=policy_kwargs,
-        seed=0,
+def _build_eval_agent(algorithm: str, checkpoint_dir: Path, env, scene_ids, args):
+    """Instantiate an agent from the registry and load a checkpoint."""
+    agent_cls = get_agent_class(algorithm)
+    eval_logger = EpochLogger(
+        output_dir="/tmp/mariha_eval_tmp",
+        logger_output=["stdout"],
     )
-
-    if cl_method is None:
-        agent = SAC(**sac_kwargs)
-    else:
-        method = cl_method.lower()
-        if method == "l2":
-            from mariha.methods.l2 import L2_SAC; agent = L2_SAC(**sac_kwargs)
-        elif method == "ewc":
-            from mariha.methods.ewc import EWC_SAC; agent = EWC_SAC(**sac_kwargs)
-        elif method == "mas":
-            from mariha.methods.mas import MAS_SAC; agent = MAS_SAC(**sac_kwargs)
-        elif method == "si":
-            from mariha.methods.si import SI_SAC; agent = SI_SAC(**sac_kwargs)
-        elif method == "owl":
-            from mariha.methods.owl import OWL_SAC; agent = OWL_SAC(**sac_kwargs)
-        elif method == "packnet":
-            from mariha.methods.packnet import PackNet_SAC; agent = PackNet_SAC(**sac_kwargs)
-        elif method == "agem":
-            from mariha.methods.agem import AGEM_SAC; agent = AGEM_SAC(**sac_kwargs)
-        elif method == "vcl":
-            from mariha.methods.vcl import VCL_SAC; agent = VCL_SAC(**sac_kwargs)
-        elif method in ("der", "der++"):
-            from mariha.methods.der import DER_SAC; agent = DER_SAC(**sac_kwargs)
-        elif method == "clonex":
-            from mariha.methods.clonex import ClonEx_SAC; agent = ClonEx_SAC(**sac_kwargs)
-        elif method == "multitask":
-            from mariha.methods.multitask import MultiTask_SAC; agent = MultiTask_SAC(**sac_kwargs)
-        else:
-            raise ValueError(f"Unknown cl_method: '{cl_method}'")
-
-    agent.load_model(str(checkpoint_dir))
+    agent = agent_cls.from_args(args, env=env, logger=eval_logger, scene_ids=scene_ids)
+    agent.load_checkpoint(checkpoint_dir)
     return agent
 
 
@@ -191,7 +161,8 @@ def main() -> None:
     args = parser.parse_args()
 
     experiment_dir = Path(args.experiment_dir)
-    method_name = args.cl_method or "sac"
+    # --cl_method overrides --algorithm for backwards compatibility
+    method_name = args.cl_method or args.algorithm
     checkpoint_base = experiment_dir / "checkpoints" / method_name
 
     # ------------------------------------------------------------------ #
@@ -231,18 +202,6 @@ def main() -> None:
     logger.info("Evaluating on %d scenes.", len(scenes_to_eval))
 
     # ------------------------------------------------------------------ #
-    # Policy kwargs (must match training config)
-    # ------------------------------------------------------------------ #
-    activation = get_activation_from_str(args.activation)
-    policy_kwargs = dict(
-        hidden_sizes=tuple(args.hidden_sizes),
-        activation=activation,
-        use_layer_norm=args.use_layer_norm,
-        num_heads=args.num_heads,
-        hide_task_id=args.hide_task_id,
-    )
-
-    # ------------------------------------------------------------------ #
     # Build a minimal dummy env to get obs/action spaces for agent init
     # ------------------------------------------------------------------ #
     from mariha.env.continual import make_scene_env
@@ -259,7 +218,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     logger.info("=== Final checkpoint eval ===")
     final_agent = _build_eval_agent(
-        args.cl_method, final_checkpoint, dummy_env, scene_ids, policy_kwargs
+        method_name, final_checkpoint, dummy_env, scene_ids, args
     )
 
     R_final = np.zeros(len(scenes_to_eval))
@@ -298,8 +257,8 @@ def main() -> None:
                 continue
 
             task_agent = _build_eval_agent(
-                args.cl_method, task_checkpoints[task_idx],
-                dummy_env, scene_ids, policy_kwargs,
+                method_name, task_checkpoints[task_idx],
+                dummy_env, scene_ids, args,
             )
             spec = eval_specs[scene_id]
             mean_ret, _ = eval_on_scene(
@@ -328,7 +287,7 @@ def main() -> None:
     results = {
         "metadata": {
             "subject": args.subject,
-            "cl_method": method_name,
+            "algorithm": method_name,
             "run_prefix": args.run_prefix,
             "n_episodes": args.n_episodes,
             "n_scenes": len(scenes_to_eval),
