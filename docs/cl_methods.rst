@@ -93,18 +93,38 @@ This avoids the expensive Jacobian computation needed by EWC and MAS.
 
 Reference: Zenke et al., 2017 — `arXiv:1703.04200 <https://arxiv.org/abs/1703.04200>`_.
 
-``owl`` — Online continual learning With Likelihood adjustment
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``owl`` — Online continual learning Without confLict
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`~mariha.methods.owl.OWL_SAC` wraps EWC with a **UCB1 bandit**
-that adaptively scales the regularisation coefficient.  Tasks with higher
-UCB scores (less-frequently-seen or high-uncertainty tasks) receive
-stronger regularisation, biasing the update toward protecting weights
-critical to those tasks.
+:class:`~mariha.methods.owl.OWL_SAC` combines three mechanisms to prevent
+catastrophic forgetting without requiring task identity at test time:
 
-The bandit weight is stored as a ``tf.Variable`` and updated at each task
-boundary, so it is readable inside the compiled ``@tf.function`` without
-retracing.
+1. **Multi-head architecture** — one task-specific output head per task.
+   The shared trunk is conditioned only on pixel observations
+   (``hide_task_id=True``); the task one-hot is used only to route to the
+   correct head after the trunk.  Learned features are therefore
+   task-agnostic.
+
+2. **EWC on the shared trunk** — Fisher-diagonal importance weights are
+   computed only on the trunk parameters (automatically enforced: when
+   ``num_heads > 1``, ``common_variables`` excludes the per-task heads).
+
+3. **EWAF bandit** (Exponentially Weighted Average Forecaster) — tracks a
+   probability distribution over task heads based on TD-error feedback.
+   At test time when task identity is unknown, the head with the highest
+   probability is used via
+   :meth:`~mariha.methods.owl.OWL_SAC.get_bandit_action`.
+
+The EWAF update rule (importance-weighted exponential weights):
+
+.. math::
+
+   \log w_i \;\mathrel{-}=\; \frac{\eta \cdot \ell_t}{p_t(i)} \;\cdot\; \mathbf{1}[i = i_t]
+
+where :math:`\ell_t` is the mean TD error on task :math:`i_t` and
+:math:`p_t(i) = \operatorname{softmax}(\log \mathbf{w})_i`.
+
+Reference: Kessler et al., 2022 — `arXiv:2106.02940 <https://arxiv.org/abs/2106.02940>`_.
 
 .. _gradient-projection:
 

@@ -198,7 +198,8 @@ MariHA introduces the following extensions over COOM:
   et al., 2017); not present in COOM.
 * **DER++** — actor distillation from episodic memory (Buzzega et al.,
   2020); not present in COOM.
-* **OWL** — EWC with UCB1 bandit for adaptive regularisation scaling;
+* **OWL** — multi-head SAC with EWC on the shared trunk and an EWAF
+  bandit for test-time task inference (Kessler et al., 2022);
   not present in COOM.
 * **Episode-driven loop** — training ends when the curriculum is exhausted,
   not at a fixed global step count.

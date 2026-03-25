@@ -1,74 +1,87 @@
-"""Online continual learning With Likelihood adjustment (OWL).
+"""Online continual learning Without confLict (OWL).
 
-Extends EWC regularisation with a UCB1 bandit that adaptively scales the
-regularisation coefficient per task.  Tasks with higher UCB scores receive
-stronger regularisation, biasing the update toward protecting the weights
-most important for those tasks.
+Implements the continual RL method from Kessler et al.:
+  "Same State, Different Task: Continual Reinforcement Learning without Interference"
+  AAAI 2022 — arXiv:2106.02940
 
-The bandit is updated at each task boundary with the cumulative return from
-that task (as a proxy for forgetting risk).  When no test environments are
-available (MariHA default), the bandit weight is used purely during training.
+OWL prevents catastrophic forgetting through three mechanisms:
 
-Reference: arXiv:1906.00322 (OWL-inspired; see also Evron et al., 2022).
+1. **Multi-head architecture** — one task-specific output head per task; the
+   shared trunk never sees the task one-hot (``hide_task_id=True``).  With
+   ``num_heads > 1``, ``common_variables`` returns only the trunk, so EWC
+   automatically regularises the shared features without penalising the
+   task-specific heads.
+
+2. **EWC regularisation on the shared trunk** — same Fisher-diagonal
+   importance weights as plain EWC, restricted to the trunk via
+   ``common_variables``.
+
+3. **EWAF bandit** (Exponentially Weighted Average Forecaster) — maintains
+   a probability distribution over task heads.  At each task boundary the
+   distribution is updated with the mean TD error from that task; the head
+   with the highest probability can be used at test-time when the task
+   identity is unknown.
 """
 
 from __future__ import annotations
 
-import math
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import tensorflow as tf
 
 from mariha.methods.ewc import EWC_SAC
+from mariha.utils.running import create_one_hot_vec
 
 
 # ---------------------------------------------------------------------------
-# UCB1 bandit
+# EWAF bandit
 # ---------------------------------------------------------------------------
 
 
-class UCBBandit:
-    """UCB1 bandit over ``num_arms`` tasks.
+class EWAFBandit:
+    """Exponentially Weighted Average Forecaster (hedge variant).
+
+    Maintains a distribution over ``num_arms`` arms using importance-weighted
+    exponential updates.  A lower loss for an arm increases its probability.
 
     Args:
-        num_arms: Number of task arms.
-        c: Exploration constant.  Higher values favour arms seen less often.
+        num_arms: Number of arms (task heads).
+        eta: Learning rate.  Higher values make the distribution more peaked
+            toward recently low-loss arms.
     """
 
-    def __init__(self, num_arms: int, c: float = 1.0) -> None:
+    def __init__(self, num_arms: int, eta: float = 0.1) -> None:
         self.num_arms = num_arms
-        self.c = c
-        self.counts = np.zeros(num_arms, dtype=np.float64)
-        self.values = np.zeros(num_arms, dtype=np.float64)
-        self.total = 0
+        self.eta = eta
+        # Log-weights; initialised uniformly (all zeros → uniform softmax).
+        self._log_w = np.zeros(num_arms, dtype=np.float64)
 
-    def update(self, arm: int, reward: float) -> None:
-        """Update arm estimate with an observed reward."""
-        self.counts[arm] += 1
-        self.total += 1
-        n = self.counts[arm]
-        self.values[arm] += (reward - self.values[arm]) / n
-
-    def ucb_scores(self) -> np.ndarray:
-        """Return UCB1 scores, normalised to sum to 1."""
-        if self.total == 0:
-            return np.ones(self.num_arms) / self.num_arms
-        scores = np.empty(self.num_arms)
-        for i in range(self.num_arms):
-            if self.counts[i] == 0:
-                scores[i] = float("inf")
-            else:
-                scores[i] = self.values[i] + self.c * math.sqrt(
-                    math.log(self.total) / self.counts[i]
-                )
-        scores = np.clip(scores, 0.0, None)
-        total = scores.sum()
-        return scores / total if total > 0 else np.ones(self.num_arms) / self.num_arms
+    def probabilities(self) -> np.ndarray:
+        """Return a softmax probability vector over arms."""
+        shifted = self._log_w - self._log_w.max()  # numerical stability
+        p = np.exp(shifted)
+        return p / p.sum()
 
     def best_arm(self) -> int:
-        """Return the arm with the highest UCB score."""
-        return int(np.argmax(self.ucb_scores()))
+        """Return the arm with the highest probability."""
+        return int(np.argmax(self._log_w))
+
+    def update(self, arm: int, loss: float) -> None:
+        """Importance-weighted update for the selected arm.
+
+        Args:
+            arm: Index of the arm that was evaluated.
+            loss: Non-negative loss signal.  Lower loss increases the arm's
+                probability (``log_w[arm] -= eta * loss / p[arm]``).
+        """
+        p = self.probabilities()
+        if p[arm] > 0.0:
+            self._log_w[arm] -= self.eta * loss / p[arm]
+
+    def reset(self) -> None:
+        """Reset all log-weights to uniform."""
+        self._log_w = np.zeros(self.num_arms, dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +90,30 @@ class UCBBandit:
 
 
 class OWL_SAC(EWC_SAC):
-    """OWL: EWC regularisation weighted by a UCB1 bandit.
+    """OWL: multi-head SAC + EWC on shared trunk + EWAF bandit.
 
-    At each task boundary the bandit weight for the completed task is updated.
-    Before the next task begins, the EWC regularisation coefficient is scaled
-    by the UCB score of the *new* task, stored in a ``tf.Variable`` so it can
-    be read inside a compiled ``tf.function`` without re-tracing.
+    Forces the multi-head architecture required by OWL:
+
+    - ``num_heads`` is set to ``num_tasks`` so each task gets its own output
+      head.
+    - ``hide_task_id`` is set to ``True`` so the shared trunk processes
+      observations without access to the task identity.
+    - ``reset_buffer_on_task_change`` is ``True`` (paper default: flush
+      task-specific data at each boundary).
+
+    With ``num_heads > 1``, ``actor.common_variables`` and
+    ``critic.common_variables`` return only the trunk parameters, so EWC
+    automatically restricts its penalty to the shared features.
+
+    The EWAF bandit is updated at the end of each task using the mean TD
+    error accumulated during training on that task.  Call
+    :meth:`get_bandit_action` to select an action using the bandit-inferred
+    head at test-time when the true task identity is unknown.
 
     Args:
-        cl_reg_coef: Base EWC regularisation coefficient λ.
-        regularize_critic: Also regularise critic weights.
-        bandit_c: UCB1 exploration constant.
+        cl_reg_coef: EWC regularisation coefficient λ.
+        regularize_critic: Also regularise critic trunk weights.
+        ewaf_eta: EWAF bandit learning rate η.
         **kwargs: Forwarded to :class:`~mariha.methods.ewc.EWC_SAC`.
     """
 
@@ -95,46 +121,75 @@ class OWL_SAC(EWC_SAC):
         self,
         cl_reg_coef: float = 1.0,
         regularize_critic: bool = False,
-        bandit_c: float = 1.0,
+        ewaf_eta: float = 0.1,
         **kwargs,
     ) -> None:
+        # Force multi-head setup.  scene_ids must be present in kwargs (it
+        # is always supplied as a keyword argument by from_args/run_benchmark).
+        scene_ids = kwargs.get("scene_ids", [])
+        num_tasks = len(scene_ids)
+
+        policy_kwargs = dict(kwargs.pop("policy_kwargs", None) or {})
+        policy_kwargs["num_heads"] = num_tasks
+        policy_kwargs["hide_task_id"] = True
+        kwargs["policy_kwargs"] = policy_kwargs
+        # OWL flushes the replay buffer at each task switch (paper default).
+        kwargs["reset_buffer_on_task_change"] = True
+
         super().__init__(
             cl_reg_coef=cl_reg_coef,
             regularize_critic=regularize_critic,
             **kwargs,
         )
-        self.bandit = UCBBandit(self.num_tasks, c=bandit_c)
-        # Stores current task's normalised bandit weight as a tf.Variable so
-        # it can be read inside a @tf.function without triggering a retrace.
-        self._bandit_scale = tf.Variable(1.0, trainable=False, dtype=tf.float32)
-        self._task_return_acc = 0.0
+
+        self.ewaf = EWAFBandit(self.num_tasks, eta=ewaf_eta)
+        self._task_td_errors: List[float] = []
 
     # ------------------------------------------------------------------
-    # Override auxiliary loss to scale by bandit weight
-    # ------------------------------------------------------------------
-
-    def get_auxiliary_loss(self, seq_idx: tf.Tensor) -> tf.Tensor:
-        """EWC regularisation loss scaled by the bandit weight."""
-        base_loss = super().get_auxiliary_loss(seq_idx)
-        return base_loss * self._bandit_scale
-
-    # ------------------------------------------------------------------
-    # SAC lifecycle hooks
+    # Lifecycle hooks
     # ------------------------------------------------------------------
 
     def on_task_start(self, current_task_idx: int) -> None:
         super().on_task_start(current_task_idx)
-        self._task_return_acc = 0.0
-        # Scale the regularisation by the UCB score for this task.
-        # Multiply by num_tasks so the average scale across tasks is ~1.
-        scores = self.bandit.ucb_scores()
-        w = float(scores[current_task_idx]) * self.num_tasks
-        self._bandit_scale.assign(w)
+        self._task_td_errors = []
 
     def on_task_end(self, current_task_idx: int) -> None:
+        """Update the EWAF with mean TD error accumulated during this task."""
         super().on_task_end(current_task_idx)
-        self.bandit.update(current_task_idx, self._task_return_acc)
+        if self._task_td_errors:
+            mean_td = float(np.mean(self._task_td_errors))
+            self.ewaf.update(current_task_idx, mean_td)
 
-    def get_bandit_task(self) -> int:
-        """Select the task with the highest UCB score (for evaluation)."""
-        return self.bandit.best_arm()
+    # ------------------------------------------------------------------
+    # TD-error collection
+    # ------------------------------------------------------------------
+
+    def _log_after_update(self, results: Dict) -> None:
+        super()._log_after_update(results)
+        if "abs_error" in results:
+            self._task_td_errors.append(
+                float(tf.reduce_mean(results["abs_error"]))
+            )
+
+    # ------------------------------------------------------------------
+    # Bandit-based action selection (task-agnostic inference)
+    # ------------------------------------------------------------------
+
+    def get_bandit_action(
+        self, obs: np.ndarray, deterministic: bool = True
+    ) -> int:
+        """Select an action using the EWAF-inferred task head.
+
+        Uses the task head with the highest EWAF probability, useful at
+        test-time when the true task identity is unknown.
+
+        Args:
+            obs: Current observation.
+            deterministic: If ``True``, return the greedy action.
+
+        Returns:
+            Integer action.
+        """
+        arm = self.ewaf.best_arm()
+        one_hot = create_one_hot_vec(self.num_tasks, arm)
+        return self.get_action_numpy(obs, one_hot, deterministic=deterministic)
