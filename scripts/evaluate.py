@@ -8,7 +8,7 @@ Usage::
     python scripts/evaluate.py \\
         --subject sub-01 \\
         --cl_method ewc \\
-        --run_prefix 20240322_120000_seed0 \\
+        --run_prefix 20260322_120000_seed0 \\
         --n_episodes 5
 
 Or with the installed entry point::
@@ -92,7 +92,7 @@ def build_eval_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--run_prefix",
         required=True,
-        help="Run prefix used when training, e.g. '20240322_120000_seed0'. "
+        help="Run prefix used when training, e.g. '20260322_120000_seed0'. "
         "Used to locate checkpoint directories.",
     )
     p.add_argument(

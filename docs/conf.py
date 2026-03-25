@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(".."))
 # ---------------------------------------------------------------------------
 
 project = "MariHA"
-copyright = "2024, NeuroMod"
+copyright = "2026, NeuroMod"
 author = "NeuroMod"
 release = "0.1.0"
 

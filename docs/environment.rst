@@ -10,14 +10,14 @@ Layer overview
 
 .. code-block:: text
 
-   ContinualLearningEnv
-   └── TaskIdWrapper            ← adds task_one_hot to info on reset
-       └── FrameStackWrapper    ← stacks 4 consecutive frames
-           └── ResizeWrapper    ← downsamples to 84×84
-               └── GrayscaleWrapper  ← converts RGB→greyscale
-                   └── ActionWrapper ← maps discrete 0–8 → NES button array
-                       └── SceneEnv  ← episode lifecycle, stats, termination
-                           └── MarioEnv  ← stable-retro + state loading
+   MarioEnv                          ← stable-retro + state loading
+   └── SceneEnv                      ← episode lifecycle, stats, termination
+       └── ActionWrapper             ← maps discrete 0–8 → NES button array
+           └── GrayscaleWrapper      ← converts RGB→greyscale
+               └── ResizeWrapper     ← downsamples to 84×84
+                   └── FrameStackWrapper    ← stacks 4 consecutive frames
+                       └── TaskIdWrapper    ← adds task_one_hot to info on reset
+                           └── ContinualLearningEnv  ← sequences episodes
 
 Each layer is applied by :func:`~mariha.env.continual.make_scene_env` and
 can be imported from :mod:`mariha.env.wrappers`.
@@ -45,7 +45,7 @@ encourages forward progress.
 :class:`~mariha.env.scene.SceneEnv` wraps ``MarioEnv`` and manages the
 episode lifecycle:
 
-* ``reset(episode_spec)`` loads the human clip's ``.state.gz`` file,
+* ``reset(episode_spec)`` loads the human clip's ``.state`` file,
   snapshots the initial lives, score, coins, and X-position.
 * ``step()`` checks three termination conditions after each step:
 

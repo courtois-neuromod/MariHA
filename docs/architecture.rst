@@ -7,10 +7,10 @@ data to trained checkpoints and evaluation metrics.
 .. note::
    MariHA is a port and extension of `COOM <https://github.com/TTomilin/COOM>`_,
    a continual RL benchmark built on VizDoom.  The SAC training loop,
-   model architecture, replay buffers, and all 11 original CL baselines
+   model architecture, replay buffers, and 8 of the 11 CL baselines
    follow COOM's design; MariHA adapts them to the Mario domain, adds a
    human-aligned episode curriculum, and introduces three new methods
-   (SI, DER++, ClonEx).
+   (SI, DER++, OWL).
 
 Data flow overview
 ------------------
@@ -19,7 +19,7 @@ Data flow overview
 
    ┌─────────────────────────────────────────────────────────────────┐
    │  data/mario.scenes/sub-XX/                                      │
-   │  Human gameplay clips (.state.gz + events TSV)                  │
+   │  Human gameplay clips (.state + events TSV)                  │
    └──────────────────────┬──────────────────────────────────────────┘
                           │
                           ▼
@@ -77,7 +77,7 @@ Reads BIDS-formatted events TSV files from ``data/mario.scenes`` and
 converts them into an ordered list of :class:`~mariha.curriculum.episode.EpisodeSpec`
 objects.  Each ``EpisodeSpec`` holds:
 
-* The path to the ``.state.gz`` emulator snapshot (starting game state)
+* The path to the ``.state`` emulator snapshot (starting game state)
 * The frame budget (``max_steps = frame_stop - frame_start``)
 * Scene and subject metadata
 
@@ -92,7 +92,7 @@ Three layers of environment abstraction:
 
 1. :class:`~mariha.env.base.MarioEnv` — thin wrapper around ``stable-retro``
    that registers the bundled ``SuperMarioBros-Nes`` integration, loads
-   ``.state.gz`` files into the emulator, and computes the composite
+   ``.state`` files into the emulator, and computes the composite
    X-position reward (``Δx`` per step).
 
 2. :class:`~mariha.env.scene.SceneEnv` — episode lifecycle manager.
@@ -188,7 +188,7 @@ removed):
 * SAC training loop (``mariha.rl.sac``)
 * Actor / Critic CNN architecture (``mariha.rl.models``)
 * Replay buffers and priority trees (``mariha.replay``)
-* L2, EWC, MAS, OWL, PackNet, A-GEM, VCL, ClonEx baselines
+* L2, EWC, MAS, PackNet, A-GEM, VCL, ClonEx, MultiTask baselines
 
 MariHA introduces the following extensions over COOM:
 
@@ -198,7 +198,8 @@ MariHA introduces the following extensions over COOM:
   et al., 2017); not present in COOM.
 * **DER++** — actor distillation from episodic memory (Buzzega et al.,
   2020); not present in COOM.
-* **ClonEx critic distillation** — extends DER++ with Q-value MSE loss.
+* **OWL** — EWC with UCB1 bandit for adaptive regularisation scaling;
+  not present in COOM.
 * **Episode-driven loop** — training ends when the curriculum is exhausted,
   not at a fixed global step count.
 * **Evaluation suite** — ``mariha.eval`` with AP, BWT, forgetting,

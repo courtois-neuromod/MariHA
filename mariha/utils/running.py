@@ -78,7 +78,7 @@ def set_seed(seed: int, env: Optional[gymnasium.Env] = None) -> None:
 
 
 def get_readable_timestamp() -> str:
-    """Return a human-readable timestamp string, e.g. ``'2024_03_01__12_00_00'``."""
+    """Return a human-readable timestamp string, e.g. ``'2026_03_01__12_00_00'``."""
     return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
 
 

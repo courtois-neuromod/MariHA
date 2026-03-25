@@ -138,7 +138,7 @@ def find_task_checkpoints(
     Args:
         checkpoint_base: Directory containing all checkpoint dirs (e.g.
             ``experiments/checkpoints/ewc``).
-        run_prefix: The timestamp + seed string, e.g. ``20240322_120000_seed0``.
+        run_prefix: The timestamp + seed string, e.g. ``20260322_120000_seed0``.
 
     Returns:
         Dict mapping task index → checkpoint directory path.

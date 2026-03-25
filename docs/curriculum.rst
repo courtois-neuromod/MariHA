@@ -18,7 +18,7 @@ Each human gameplay clip is represented as an
 
    @dataclass
    class EpisodeSpec:
-       state_file: Path   # path to .state.gz emulator snapshot
+       state_file: Path   # path to .state emulator snapshot
        max_steps:  int    # frame budget = frame_stop - frame_start
        scene_id:   str    # e.g. 'w1l1s0'
        clip_code:  str    # 14-char ordinal sort key
@@ -29,7 +29,7 @@ Each human gameplay clip is represented as an
        level:      str    # 'w1l1'
        metadata:   dict   # score, coins, enemies_killed, …
 
-The ``state_file`` is a gzip-compressed emulator save-state that places
+The ``state_file`` is an emulator save-state that places
 Mario at exactly the position and game state the human was at when their
 clip started.  This is what makes the training episodes *human-aligned* —
 the agent faces the exact same visual and gameplay context the human did.

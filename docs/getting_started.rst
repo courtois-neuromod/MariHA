@@ -42,9 +42,9 @@ Subject gameplay data is stored in ``data/mario.scenes`` as a
    # Single subject
    cd data/mario.scenes && git annex get sub-01/
 
-Each subject's data contains ``.state.gz`` files — compressed emulator
-snapshots that place Mario at exactly the position and game state a human
-player was at during a recorded clip.
+Each subject's data contains ``.state`` files — emulator snapshots that
+place Mario at exactly the position and game state a human player was at
+during a recorded clip.
 
 Training — full CL curriculum
 ------------------------------
@@ -108,7 +108,7 @@ After training, evaluate the saved checkpoints:
    mariha-evaluate \
      --subject     sub-01 \
      --cl_method   ewc \
-     --run_prefix  20240322_120000_seed0 \
+     --run_prefix  20260322_120000_seed0 \
      --n_episodes  5 \
      --eval_diagonal
 
@@ -117,6 +117,6 @@ and evaluates it on that scene, enabling BWT and forgetting computation.
 Without it, only the final checkpoint is used (faster).
 
 Results are saved to
-``experiments/sub-01/ewc/20240322_120000_seed0/eval_results.json``.
+``experiments/sub-01/ewc/20260322_120000_seed0/eval_results.json``.
 
 See :doc:`evaluation` for a full description of all reported metrics.
