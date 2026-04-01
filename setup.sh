@@ -27,6 +27,7 @@ die()     { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
 # Parse flags
 # ---------------------------------------------------------------------------
 CHECK_DATA=true
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 for arg in "$@"; do
   [[ "$arg" == "--no-data" ]] && CHECK_DATA=false
 done
@@ -38,46 +39,42 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
 # ---------------------------------------------------------------------------
-# 1. Python version check
+# 1. Ensure uv is available
 # ---------------------------------------------------------------------------
-info "Checking Python version..."
-PYTHON="${PYTHON:-python3}"
-if ! command -v "$PYTHON" &>/dev/null; then
-  die "Python not found. Set PYTHON=python3.x or install Python 3.9+."
+info "Checking for uv..."
+if ! command -v uv &>/dev/null; then
+  info "uv not found — installing..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
 fi
-
-PY_VERSION=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MAJOR=$("$PYTHON" -c "import sys; print(sys.version_info.major)")
-PY_MINOR=$("$PYTHON" -c "import sys; print(sys.version_info.minor)")
-
-if [[ "$PY_MAJOR" -lt 3 || ( "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 9 ) ]]; then
-  die "Python 3.9+ required, found $PY_VERSION."
-fi
-success "Python $PY_VERSION"
+success "uv $(uv --version | awk '{print $2}')"
 
 # ---------------------------------------------------------------------------
-# 2. Virtual environment
+# 2. Ensure Python $PYTHON_VERSION is available via uv
+# ---------------------------------------------------------------------------
+info "Ensuring Python $PYTHON_VERSION is available..."
+uv python install "$PYTHON_VERSION"
+success "Python $PYTHON_VERSION ready."
+
+# ---------------------------------------------------------------------------
+# 3. Virtual environment
 # ---------------------------------------------------------------------------
 VENV_DIR="$REPO_ROOT/env"
 if [[ -d "$VENV_DIR/bin" ]]; then
   info "Virtual environment already exists at env/ — reusing."
 else
   info "Creating virtual environment at env/ ..."
-  "$PYTHON" -m venv "$VENV_DIR"
+  uv venv --python "$PYTHON_VERSION" "$VENV_DIR"
   success "Virtual environment created."
 fi
 
 PYTHON_VENV="$VENV_DIR/bin/python"
-PIP="$VENV_DIR/bin/pip"
-
-# Upgrade pip silently
-"$PIP" install --upgrade pip --quiet
 
 # ---------------------------------------------------------------------------
-# 3. Install the package
+# 4. Install the package
 # ---------------------------------------------------------------------------
 info "Installing mariha and dependencies (this may take a few minutes)..."
-"$PIP" install -e ".[dev]" --quiet
+uv pip install --python "$PYTHON_VENV" -e ".[dev]" --quiet
 success "Package installed."
 
 # Verify tf_keras is importable (needed for TF >= 2.16 / Keras 3 environments)
@@ -91,7 +88,7 @@ if "$PYTHON_VENV" -c "import tensorflow as tf; v=tf.__version__; parts=v.split('
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Stimuli data check
+# 5. Stimuli data check
 # ---------------------------------------------------------------------------
 STIMULI_DIR="$REPO_ROOT/data/mario/stimuli/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
