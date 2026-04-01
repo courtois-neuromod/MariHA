@@ -1,0 +1,17 @@
+{
+  "reward": {},
+  "done": {
+    "variables": {}
+  },
+  "info": {
+    "player_x_posHi": {},
+    "player_x_posLo": {},
+    "player_y_pos": {},
+    "lives": {},
+    "score": {},
+    "coins": {},
+    "stage": {},
+    "scrolling": {},
+    "powerstate": {}
+  }
+}
