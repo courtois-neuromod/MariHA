@@ -38,7 +38,7 @@ from mariha.rl import models
 from mariha.rl.sac import SAC
 from mariha.utils.config import build_parser
 from mariha.utils.logging import EpochLogger
-from mariha.utils.running import get_activation_from_str, get_readable_timestamp
+from mariha.utils.running import get_activation_from_str, get_readable_timestamp, str2bool
 
 
 def main() -> None:
@@ -46,6 +46,19 @@ def main() -> None:
     parser.add_argument(
         "--total_steps", type=int, default=200_000,
         help="Total environment steps for single-scene training."
+    )
+    parser.add_argument(
+        "--save_trajectories", type=str2bool, default=True,
+        help="Save per-episode action trajectories as .npz files for exact replay. "
+             "Default: True. Disable with --save_trajectories False for large sweeps.",
+    )
+    parser.add_argument(
+        "--save_weights", action="store_true", default=False,
+        help="Save final actor weights after training completes.",
+    )
+    parser.add_argument(
+        "--checkpoint_every", type=int, default=0,
+        help="Save actor weights every N environment steps. 0 = disabled.",
     )
     args = parser.parse_args()
 
@@ -162,10 +175,15 @@ def main() -> None:
     batch_size = args.batch_size
     act_dim = env.action_space.n
 
-    obs, info = env.reset(episode_spec=next(spec_cycle))
+    traj_dir = Path(run_dir) / "trajectories"
+    ckpt_dir = Path(run_dir) / "checkpoints"
+
+    current_spec = next(spec_cycle)
+    obs, info = env.reset(episode_spec=current_spec)
     episodes = 0
     ep_return = 0.0
     ep_len = 0
+    ep_actions: list[int] = []
     start_time = time.time()
 
     pbar = tqdm(total=args.total_steps, unit="step", dynamic_ncols=True)
@@ -184,6 +202,7 @@ def main() -> None:
         done = terminated or truncated
         ep_return += reward
         ep_len += 1
+        ep_actions.append(action)
 
         replay.store(obs, action, reward, next_obs, terminated, one_hot)
         obs = next_obs
@@ -192,9 +211,30 @@ def main() -> None:
             episodes += 1
             logger.store({"train/return": ep_return, "train/ep_length": ep_len})
             pbar.set_postfix(ep=episodes, ret=f"{ep_return:.1f}", refresh=False)
+
+            if args.save_trajectories:
+                traj_dir.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    traj_dir / f"episode_{episodes:05d}.npz",
+                    actions=np.array(ep_actions, dtype=np.int32),
+                    state_file=str(current_spec.state_file),
+                    scene_id=scene_id,
+                    episode_index=episodes,
+                    ep_return=ep_return,
+                    ep_len=ep_len,
+                )
+
             ep_return = 0.0
             ep_len = 0
-            obs, info = env.reset(episode_spec=next(spec_cycle))
+            ep_actions = []
+            current_spec = next(spec_cycle)
+            obs, info = env.reset(episode_spec=current_spec)
+
+        # Interval weight checkpoint
+        if args.checkpoint_every > 0 and (step + 1) % args.checkpoint_every == 0:
+            step_ckpt = ckpt_dir / f"step_{step + 1:07d}"
+            step_ckpt.mkdir(parents=True, exist_ok=True)
+            actor.save_weights(str(step_ckpt / "actor"))
 
         # Policy update
         if step >= args.update_after and step % args.update_every == 0 and replay.size >= batch_size:
@@ -261,6 +301,13 @@ def main() -> None:
 
     pbar.close()
     env.close()
+
+    if args.save_weights:
+        final_ckpt = ckpt_dir / "final"
+        final_ckpt.mkdir(parents=True, exist_ok=True)
+        actor.save_weights(str(final_ckpt / "actor"))
+        print(f"Actor weights saved to {final_ckpt}")
+
     print("Single-scene training complete.")
 
 
