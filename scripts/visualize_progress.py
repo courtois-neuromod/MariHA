@@ -38,7 +38,8 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import tensorflow as tf
@@ -174,7 +175,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,
-        help="Directory for output MP4s. Defaults to <run_dir>/progress_videos/.",
+        help="Directory for output MP4s. Defaults to <repo>/replay/visualize_progress/.",
     )
     parser.add_argument(
         "--fps", type=int, default=60,
@@ -207,8 +208,7 @@ def main() -> None:
         print(f"ERROR: run_dir not found: {run_dir}")
         sys.exit(1)
 
-    output_dir = Path(args.output_dir) if args.output_dir else run_dir / "progress_videos"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir) if args.output_dir else None
 
     # ------------------------------------------------------------------ #
     # Shared: scene metadata
@@ -253,6 +253,10 @@ def main() -> None:
         first_data = np.load(selected[0], allow_pickle=True)
         scene_id = str(first_data["scene_id"])
         exit_point = scene_meta[scene_id]["exit_point"]
+
+        if output_dir is None:
+            output_dir = REPO_ROOT / "replay" / "visualize_progress" / scene_id
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         env = make_scene_env(
             scene_id=scene_id,
@@ -320,6 +324,10 @@ def main() -> None:
         if not selected_dirs:
             print("ERROR: no matching checkpoints for the given selection.")
             sys.exit(1)
+
+        if output_dir is None:
+            output_dir = REPO_ROOT / "replay" / "visualize_progress" / args.scene_id
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         exit_point = scene_meta[args.scene_id]["exit_point"]
         specs = load_curriculum(subject_id=args.subject, require_existing_states=True)

@@ -75,3 +75,7 @@ dmypy.json
 
 # Logs
 *.log
+
+# Replays (keep folder, ignore contents)
+replay/*
+!replay/.gitkeep
