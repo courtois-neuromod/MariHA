@@ -25,8 +25,7 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
@@ -46,8 +45,8 @@ def main() -> None:
         help="Path to an episode_NNNNN.npz trajectory file.",
     )
     parser.add_argument(
-        "--output", type=str, default=None,
-        help="Output MP4 file path. Default: <repo>/replay/replay_episode/<scene_id>.mp4",
+        "--output", type=str, default="replay.mp4",
+        help="Output MP4 file path. Default: replay.mp4",
     )
     parser.add_argument(
         "--fps", type=int, default=60,
@@ -69,8 +68,6 @@ def main() -> None:
     scene_id = str(data["scene_id"])
     episode_index = int(data["episode_index"])
     ep_return = float(data["ep_return"])
-
-    output_path = args.output or str(REPO_ROOT / "replay" / "replay_episode" / f"{scene_id}.mp4")
 
     print(
         f"Trajectory: episode {episode_index}  |  scene {scene_id}  |  "
@@ -142,8 +139,8 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Write video
     # ------------------------------------------------------------------ #
-    write_episode_video(frames, output_path, fps=args.fps)
-    print(f"Video written: {output_path}  ({len(frames)} frames)")
+    write_episode_video(frames, args.output, fps=args.fps)
+    print(f"Video written: {args.output}  ({len(frames)} frames)")
 
 
 if __name__ == "__main__":

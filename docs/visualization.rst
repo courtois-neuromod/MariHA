@@ -6,19 +6,6 @@ All scripts capture raw NES RGB frames (full colour, ~224 × 240 px) from the
 emulator before the grayscale / resize observation pipeline, giving clean
 game footage.
 
-By default, all output goes into the ``replay/`` folder at the root of the
-repository, organised into sub-directories by script:
-
-.. code-block:: text
-
-   replay/
-   ├── replay_episode/       ← replay_episode.py
-   ├── visualize_episode/    ← visualize_episode.py
-   └── visualize_progress/   ← visualize_progress.py
-
-The ``replay/`` folder is tracked by git (via ``.gitkeep``) but its contents
-are ignored, so videos are never accidentally pushed to the remote.
-
 .. list-table:: Script comparison
    :widths: 20 20 20 20 20
    :header-rows: 1
@@ -61,14 +48,9 @@ identical to what happened during training.
 
 .. code-block:: bash
 
-   # Output goes to replay/replay_episode/replay.mp4 by default
-   python scripts/replay_episode.py \
-       --trajectory experiments/single/w1l1s0/<run>/trajectories/episode_00050.npz
-
-   # Custom output path
    python scripts/replay_episode.py \
        --trajectory experiments/single/w1l1s0/<run>/trajectories/episode_00050.npz \
-       --output replay/replay_episode/ep50.mp4
+       --output /tmp/ep50.mp4
 
 .. list-table:: CLI flags
    :widths: 30 15 55
@@ -81,7 +63,7 @@ identical to what happened during training.
      - *(required)*
      - Path to an ``episode_NNNNN.npz`` file.
    * - ``--output``
-     - ``replay/replay_episode/<scene_id>.mp4``
+     - ``replay.mp4``
      - Output MP4 file path.
    * - ``--fps``
      - ``60``
@@ -106,18 +88,11 @@ interval snapshots.
 
 .. code-block:: bash
 
-   # Output goes to replay/visualize_episode/visualize.mp4 by default
-   python scripts/visualize_episode.py \
-       --subject sub-01 \
-       --scene_id w1l1s0 \
-       --checkpoint_dir experiments/single/w1l1s0/<run>/checkpoints/final
-
-   # Custom output path
    python scripts/visualize_episode.py \
        --subject sub-01 \
        --scene_id w1l1s0 \
        --checkpoint_dir experiments/single/w1l1s0/<run>/checkpoints/final \
-       --output replay/visualize_episode/viz_w1l1s0.mp4
+       --output /tmp/viz.mp4
 
 .. list-table:: CLI flags
    :widths: 30 15 55
@@ -136,7 +111,7 @@ interval snapshots.
      - *(required)*
      - Directory containing ``actor.index`` / ``actor.data-*`` files.
    * - ``--output``
-     - ``replay/visualize_episode/<scene_id>.mp4``
+     - ``visualize.mp4``
      - Output MP4 file path.
    * - ``--seed``
      - ``0``
@@ -167,16 +142,17 @@ Two modes:
 
 .. code-block:: bash
 
-   # Every 10th episode — output goes to replay/visualize_progress/ by default
+   # Every 10th episode
    python scripts/visualize_progress.py \
        --run_dir experiments/single/w1l1s0/<run> \
-       --every 10
+       --every 10 \
+       --output_dir /tmp/progress
 
-   # Specific episodes, custom output dir
+   # Specific episodes
    python scripts/visualize_progress.py \
        --run_dir experiments/single/w1l1s0/<run> \
        --episodes 1,50,100,200 \
-       --output_dir replay/visualize_progress/w1l1s0
+       --output_dir /tmp/progress
 
 **Usage — weights mode:**
 
@@ -187,7 +163,8 @@ Two modes:
        --mode weights \
        --subject sub-01 \
        --scene_id w1l1s0 \
-       --every 2
+       --every 2 \
+       --output_dir /tmp/progress
 
 .. list-table:: CLI flags
    :widths: 30 15 55
@@ -211,7 +188,7 @@ Two modes:
      - Visualize every N episodes / checkpoints.
        Mutually exclusive with ``--episodes``.
    * - ``--output_dir``
-     - ``replay/visualize_progress/<scene_id>/``
+     - ``<run_dir>/progress_videos/``
      - Directory for output MP4s.
    * - ``--fps``
      - ``60``

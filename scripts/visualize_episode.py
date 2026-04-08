@@ -25,8 +25,7 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import tensorflow as tf
@@ -58,8 +57,8 @@ def main() -> None:
         help="Directory containing saved actor weights (actor.index / actor.data-*).",
     )
     parser.add_argument(
-        "--output", type=str, default=None,
-        help="Output MP4 file path. Default: <repo>/replay/visualize_episode/<scene_id>.mp4",
+        "--output", type=str, default="visualize.mp4",
+        help="Output MP4 file path.",
     )
     parser.add_argument(
         "--seed", type=int, default=0,
@@ -80,8 +79,6 @@ def main() -> None:
     args = parser.parse_args()
 
     tf.random.set_seed(args.seed)
-
-    output_path = args.output or str(REPO_ROOT / "replay" / "visualize_episode" / f"{args.scene_id}.mp4")
 
     ckpt_dir = Path(args.checkpoint_dir)
     if not (ckpt_dir / "actor.index").exists():
@@ -184,8 +181,8 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Write video
     # ------------------------------------------------------------------ #
-    write_episode_video(frames, output_path, fps=args.fps)
-    print(f"Video written: {output_path}  ({len(frames)} frames)")
+    write_episode_video(frames, args.output, fps=args.fps)
+    print(f"Video written: {args.output}  ({len(frames)} frames)")
 
 
 if __name__ == "__main__":
