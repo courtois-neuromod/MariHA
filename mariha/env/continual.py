@@ -86,6 +86,49 @@ def make_scene_env(
     return env
 
 
+def play_render_episode(
+    actor_fn,
+    scene_id: str,
+    exit_point: int,
+    scene_ids: list[str],
+    spec,
+    stimuli_path: Path = STIMULI_PATH,
+    scenarios_dir: Path = SCENARIOS_DIR,
+) -> None:
+    """Create a human-render env, play one greedy episode with the given policy, close it.
+
+    This is the shared implementation used by both ``run_single.py`` and
+    ``ContinualLearningEnv.render_checkpoint()``.  Callers are responsible for
+    closing any existing emulator instance before calling this function
+    (stable-retro allows only one emulator per process).
+
+    Args:
+        actor_fn: Callable ``(obs, one_hot) -> int`` — the current policy.
+        scene_id: Scene to render.
+        exit_point: X-coordinate goal for the scene.
+        scene_ids: Full ordered list of scene IDs (for one-hot encoding).
+        spec: ``EpisodeSpec`` to load as the starting state.
+        stimuli_path: Override for stimuli directory.
+        scenarios_dir: Override for scenario files directory.
+    """
+    render_env = make_scene_env(
+        scene_id=scene_id,
+        exit_point=exit_point,
+        scene_ids=scene_ids,
+        render_mode="human",
+        stimuli_path=stimuli_path,
+        scenarios_dir=scenarios_dir,
+    )
+    obs, info = render_env.reset(episode_spec=spec)
+    one_hot = info["task_one_hot"]
+    done = False
+    while not done:
+        action = actor_fn(obs, one_hot)
+        obs, _, terminated, truncated, _ = render_env.step(action)
+        done = terminated or truncated
+    render_env.close()
+
+
 class ContinualLearningEnv:
     """Sequences episodes from a curriculum across multiple scenes.
 
@@ -126,6 +169,7 @@ class ContinualLearningEnv:
         self._env: TaskIdWrapper | None = None
         self._current_scene_id: str | None = None
         self._next_spec: Any = None  # prefetched from sequence
+        self._current_spec: Any = None  # spec of the episode currently being played
         self._episode_count: int = 0
         self._done: bool = False
 
@@ -171,6 +215,7 @@ class ContinualLearningEnv:
             raise StopIteration("Curriculum sequence is exhausted.")
 
         spec = self._next_spec
+        self._current_spec = spec
         task_switch = spec.scene_id != self._current_scene_id
 
         # Rebuild the env if the task changed.
@@ -241,6 +286,32 @@ class ContinualLearningEnv:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def render_checkpoint(self, actor_fn) -> None:
+        """Play one greedy episode with human rendering, then restore the training env.
+
+        Temporarily closes the inner scene env so the emulator can be reused
+        for rendering (stable-retro allows only one emulator per process).
+        The curriculum sequence state is not affected.
+
+        Args:
+            actor_fn: Callable ``(obs, one_hot) -> int`` — the current policy.
+        """
+        if self._current_scene_id is None or self._current_spec is None:
+            return
+        if self._env is not None:
+            self._env.close()
+        meta = self._scene_metadata[self._current_scene_id]
+        play_render_episode(
+            actor_fn=actor_fn,
+            scene_id=self._current_scene_id,
+            exit_point=meta["exit_point"],
+            scene_ids=self._scene_ids,
+            spec=self._current_spec,
+            stimuli_path=self._stimuli_path,
+            scenarios_dir=self._scenarios_dir,
+        )
+        self._build_env(self._current_scene_id)
 
     def _prefetch_next(self) -> None:
         """Advance the sequence iterator by one step."""

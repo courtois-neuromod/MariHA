@@ -169,6 +169,26 @@ and training resumes.
      - ``0``
      - Open a live render window every this many episodes. ``0`` = disabled.
 
+Live render checkpoints
+-----------------------
+
+Pass ``--render_every N`` to open a live window every *N* training episodes
+and watch the agent play one full greedy episode.  Works for both
+``mariha-run-single`` and ``mariha-run`` (full CL curriculum):
+
+.. code-block:: bash
+
+   # Single-scene
+   mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
+
+   # Full CL run
+   mariha-run --subject sub-01 --cl_method ewc --render_every 100
+
+Training pauses, the window opens, the episode plays to termination, then
+the window closes and training resumes.  The underlying implementation
+(``play_render_episode`` in ``mariha.env.continual``) is shared between both
+entry points.
+
 Checkpointing
 -------------
 

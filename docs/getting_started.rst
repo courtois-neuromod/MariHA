@@ -90,6 +90,10 @@ Key training arguments:
    * - ``--n_updates``
      - ``50``
      - Gradient steps per update round.
+   * - ``--render_every``
+     - ``0``
+     - Open a live window every this many episodes to watch the agent play
+       one full greedy episode. ``0`` = disabled.
 
 Training — single scene (debugging)
 -------------------------------------

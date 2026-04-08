@@ -57,6 +57,12 @@ cd data/mario.scenes && git annex get sub-*/
 mariha-run-cl --subject sub-01 --cl_method ewc --seed 0
 ```
 
+Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time:
+
+```bash
+mariha-run-cl --subject sub-01 --cl_method ewc --seed 0 --render_every 100
+```
+
 ### Train (single scene, for debugging)
 
 ```bash

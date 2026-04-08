@@ -35,7 +35,7 @@ import numpy as np
 import tensorflow as tf
 
 from mariha.curriculum.loader import load_curriculum
-from mariha.env.continual import make_scene_env
+from mariha.env.continual import make_scene_env, play_render_episode
 from mariha.env.scenario_gen import load_metadata
 from mariha.env.base import SCENARIOS_DIR, STIMULI_PATH
 from mariha.replay.buffers import BufferType, ReplayBuffer
@@ -45,23 +45,6 @@ from mariha.utils.config import build_parser
 from mariha.utils.logging import EpochLogger
 from mariha.utils.running import get_activation_from_str, get_readable_timestamp
 
-
-def render_episode(actor, env_kwargs: dict, spec, one_hot) -> None:
-    """Spin up a human-render env, play one greedy episode, then close it."""
-    from tensorflow_probability.python.distributions import Categorical
-
-    render_env = make_scene_env(**env_kwargs, render_mode="human")
-    obs, _ = render_env.reset(episode_spec=spec)
-    done = False
-    while not done:
-        logits = actor(
-            tf.expand_dims(tf.convert_to_tensor(obs), 0),
-            tf.expand_dims(tf.convert_to_tensor(one_hot), 0),
-        )
-        action = int(Categorical(logits=logits).mode().numpy()[0])
-        obs, _, terminated, truncated, _ = render_env.step(action)
-        done = terminated or truncated
-    render_env.close()
 
 
 def main() -> None:
@@ -185,6 +168,13 @@ def main() -> None:
     import time
     from tqdm import tqdm
 
+    def _actor_fn(obs, one_hot_vec):
+        logits = actor(
+            tf.expand_dims(tf.convert_to_tensor(obs), 0),
+            tf.expand_dims(tf.convert_to_tensor(one_hot_vec), 0),
+        )
+        return int(Categorical(logits=logits).mode().numpy()[0])
+
     actor_optimizer = Adam(learning_rate=args.lr)
     critic_optimizer = Adam(learning_rate=args.lr)
     gamma = args.gamma
@@ -228,7 +218,7 @@ def main() -> None:
             if args.render_every > 0 and episodes % args.render_every == 0:
                 pbar.write(f"[render] episode {episodes} — opening live window...")
                 env.close()
-                render_episode(actor, env_kwargs, next(spec_cycle), one_hot)
+                play_render_episode(actor_fn=_actor_fn, spec=next(spec_cycle), **env_kwargs)
                 env = make_scene_env(**env_kwargs, render_mode=args.render_mode)
 
             obs, info = env.reset(episode_spec=next(spec_cycle))
