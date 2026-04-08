@@ -49,7 +49,6 @@ domain.
    training
    cl_methods
    evaluation
-   visualization
 
 .. toctree::
    :maxdepth: 2
