@@ -63,6 +63,12 @@ mariha-run-cl --subject sub-01 --cl_method ewc --seed 0
 mariha-run-single --scene_id w1l1s0 --seed 0
 ```
 
+Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time:
+
+```bash
+mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10
+```
+
 ### Evaluate
 
 ```bash

@@ -134,6 +134,41 @@ The buffer type is set via the ``--buffer_type`` argument:
    * - ``per``
      - PER with SegmentTree and cleaner importance-sampling weights.
 
+Single-scene training (``run_single.py``)
+-----------------------------------------
+
+``mariha-run-single`` trains vanilla SAC on one scene — useful for
+debugging, hyperparameter tuning, or quick proof-of-concept runs.
+
+.. code-block:: bash
+
+   mariha-run-single --subject sub-01 --scene_id w1l1s0 --total_steps 200000
+
+**Live render checkpoints**
+
+Pass ``--render_every N`` to open a live window and watch the agent play
+one full greedy episode every *N* training episodes.  Training pauses,
+the window opens, the episode plays to termination, then the window closes
+and training resumes.
+
+.. code-block:: bash
+
+   mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
+
+.. list-table::
+   :widths: 25 10 65
+   :header-rows: 1
+
+   * - Argument
+     - Default
+     - Description
+   * - ``--total_steps``
+     - ``200000``
+     - Total environment steps.
+   * - ``--render_every``
+     - ``0``
+     - Open a live render window every this many episodes. ``0`` = disabled.
+
 Checkpointing
 -------------
 

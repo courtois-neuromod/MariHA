@@ -15,6 +15,11 @@ Or via the entry point::
 The number of training steps defaults to 200 000 (``--total_steps``).
 If ``--scene_id`` is not provided, the first scene in the subject's
 curriculum is used.
+
+Pass ``--render_every N`` to open a live window and watch one full greedy
+episode every N training episodes (a progress checkpoint)::
+
+    mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
 """
 
 from __future__ import annotations
@@ -41,11 +46,36 @@ from mariha.utils.logging import EpochLogger
 from mariha.utils.running import get_activation_from_str, get_readable_timestamp
 
 
+def render_episode(actor, env_kwargs: dict, spec, one_hot) -> None:
+    """Spin up a human-render env, play one greedy episode, then close it."""
+    from tensorflow_probability.python.distributions import Categorical
+
+    render_env = make_scene_env(**env_kwargs, render_mode="human")
+    obs, _ = render_env.reset(episode_spec=spec)
+    done = False
+    while not done:
+        logits = actor(
+            tf.expand_dims(tf.convert_to_tensor(obs), 0),
+            tf.expand_dims(tf.convert_to_tensor(one_hot), 0),
+        )
+        action = int(Categorical(logits=logits).mode().numpy()[0])
+        obs, _, terminated, truncated, _ = render_env.step(action)
+        done = terminated or truncated
+    render_env.close()
+
+
 def main() -> None:
     parser = build_parser()
     parser.add_argument(
         "--total_steps", type=int, default=200_000,
         help="Total environment steps for single-scene training."
+    )
+    parser.add_argument(
+        "--render_every", type=int, default=0,
+        help=(
+            "If > 0, open a live window and play one full greedy episode every "
+            "this many training episodes (a checkpoint render). 0 = disabled."
+        ),
     )
     args = parser.parse_args()
 
@@ -93,12 +123,12 @@ def main() -> None:
     # Environment
     # ------------------------------------------------------------------ #
     exit_point = scene_meta[scene_id]["exit_point"]
-    env = make_scene_env(
+    env_kwargs = dict(
         scene_id=scene_id,
         exit_point=exit_point,
         scene_ids=scene_ids,
-        render_mode=args.render_mode,
     )
+    env = make_scene_env(**env_kwargs, render_mode=args.render_mode)
 
     # ------------------------------------------------------------------ #
     # Logger
@@ -194,6 +224,13 @@ def main() -> None:
             pbar.set_postfix(ep=episodes, ret=f"{ep_return:.1f}", refresh=False)
             ep_return = 0.0
             ep_len = 0
+
+            if args.render_every > 0 and episodes % args.render_every == 0:
+                pbar.write(f"[render] episode {episodes} — opening live window...")
+                env.close()
+                render_episode(actor, env_kwargs, next(spec_cycle), one_hot)
+                env = make_scene_env(**env_kwargs, render_mode=args.render_mode)
+
             obs, info = env.reset(episode_spec=next(spec_cycle))
 
         # Policy update
