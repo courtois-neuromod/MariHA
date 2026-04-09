@@ -71,7 +71,7 @@ class SAC(BenchmarkAgent):
         logger: An ``EpochLogger`` for recording training statistics.
         scene_ids: Ordered list of all scene IDs in the benchmark.  Defines
             the one-hot dimension and the ``seq_idx`` mapping.
-        cl_method: Name of the CL method (used for checkpoint paths).
+        algorithm: Algorithm name string (used for checkpoint paths).
         actor_cl: Actor class to instantiate.
         critic_cl: Critic class to instantiate.
         policy_kwargs: Additional keyword arguments forwarded to both the
@@ -114,7 +114,7 @@ class SAC(BenchmarkAgent):
         env,
         logger: EpochLogger,
         scene_ids: List[str],
-        cl_method: Optional[str] = None,
+        algorithm: Optional[str] = None,
         actor_cl: Type = models.MlpActor,
         critic_cl: Type = models.MlpCritic,
         policy_kwargs: Optional[Dict] = None,
@@ -142,6 +142,11 @@ class SAC(BenchmarkAgent):
         clipnorm: Optional[float] = None,
         agent_policy_exploration: bool = False,
         render_every: int = 0,
+        post_burn_in_update_after: int = 0,
+        buffer_mode: str = "single",
+        per_scene_capacity: int = 1000,
+        flush_on: str = "session",
+        cl_hook_min_transitions: int = 500,
         experiment_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
@@ -154,7 +159,7 @@ class SAC(BenchmarkAgent):
         self.scene_ids = scene_ids
         self.num_tasks = len(scene_ids)
         self.logger = logger
-        self.cl_method = cl_method
+        self.algorithm = algorithm
         self.critic_cl = critic_cl
         self.policy_kwargs = policy_kwargs
         self.replay_size = int(replay_size)
@@ -176,6 +181,11 @@ class SAC(BenchmarkAgent):
         self.clipnorm = clipnorm
         self.agent_policy_exploration = agent_policy_exploration
         self.render_every = int(render_every)
+        self.post_burn_in_update_after = int(post_burn_in_update_after)
+        self.buffer_mode = buffer_mode
+        self.per_scene_capacity = per_scene_capacity
+        self.flush_on = flush_on
+        self.cl_hook_min_transitions = cl_hook_min_transitions
         self.experiment_dir = experiment_dir or Path("experiments")
         self.timestamp = timestamp
 
@@ -244,21 +254,43 @@ class SAC(BenchmarkAgent):
 
     def _init_replay_buffer(self) -> None:
         """(Re-)create the replay buffer according to ``self.buffer_type``."""
-        kwargs = dict(
-            obs_shape=self.obs_shape,
-            size=self.replay_size,
-            num_tasks=self.num_tasks,
-        )
-        if self.buffer_type == BufferType.FIFO:
-            self.replay_buffer = ReplayBuffer(**kwargs)
-        elif self.buffer_type == BufferType.RESERVOIR:
-            self.replay_buffer = ReservoirReplayBuffer(**kwargs)
-        elif self.buffer_type == BufferType.PRIORITY:
-            self.replay_buffer = PrioritizedReplayBuffer(**kwargs)
-        elif self.buffer_type == BufferType.PER:
-            self.replay_buffer = PrioritizedExperienceReplay(**kwargs)
+        if self.buffer_mode == "per_scene":
+            from mariha.replay.buffers import PerSceneBufferPool
+            buffer_cls = self._get_buffer_cls()
+            self.replay_buffer = PerSceneBufferPool(
+                obs_shape=self.obs_shape,
+                per_scene_capacity=self.per_scene_capacity,
+                num_tasks=self.num_tasks,
+                buffer_cls=buffer_cls,
+            )
         else:
-            raise ValueError(f"Unknown buffer type: {self.buffer_type}")
+            kwargs = dict(
+                obs_shape=self.obs_shape,
+                size=self.replay_size,
+                num_tasks=self.num_tasks,
+            )
+            if self.buffer_type == BufferType.FIFO:
+                self.replay_buffer = ReplayBuffer(**kwargs)
+            elif self.buffer_type == BufferType.RESERVOIR:
+                self.replay_buffer = ReservoirReplayBuffer(**kwargs)
+            elif self.buffer_type == BufferType.PRIORITY:
+                self.replay_buffer = PrioritizedReplayBuffer(**kwargs)
+            elif self.buffer_type == BufferType.PER:
+                self.replay_buffer = PrioritizedExperienceReplay(**kwargs)
+            else:
+                raise ValueError(f"Unknown buffer type: {self.buffer_type}")
+
+    def _get_buffer_cls(self) -> type:
+        """Return the buffer class for the configured buffer type."""
+        if self.buffer_type == BufferType.FIFO:
+            return ReplayBuffer
+        if self.buffer_type == BufferType.RESERVOIR:
+            return ReservoirReplayBuffer
+        # PER + per_scene not supported yet.
+        raise ValueError(
+            f"Buffer type '{self.buffer_type.value}' is not supported with "
+            "buffer_mode='per_scene'.  Use 'fifo' or 'reservoir'."
+        )
 
     # ------------------------------------------------------------------
     # CL extension points (overridden by subclasses)
@@ -503,7 +535,7 @@ class SAC(BenchmarkAgent):
         """Reset buffers/weights/optimizer as configured, then recompile update."""
         self.on_task_start(current_task_idx)
 
-        if self.reset_buffer_on_task_change:
+        if self.reset_buffer_on_task_change and self.buffer_mode != "per_scene":
             self._init_replay_buffer()
 
         if self.reset_actor_on_task_change:
@@ -525,6 +557,49 @@ class SAC(BenchmarkAgent):
             self.actor.common_variables
             + self.critic1.common_variables
             + self.critic2.common_variables
+        )
+
+    # ------------------------------------------------------------------
+    # Session boundary handling (per-scene buffer mode)
+    # ------------------------------------------------------------------
+
+    def _handle_session_boundary(self, current_task_idx: int) -> None:
+        """Flush per-scene buffers and run end-of-session gradient updates."""
+        from mariha.replay.buffers import PerSceneBufferPool
+
+        pool: PerSceneBufferPool = self.replay_buffer  # type: ignore[assignment]
+        total = pool.total_size
+        if total >= self.batch_size:
+            n_updates = total // self.batch_size
+            self.logger.log(
+                f"[session-flush] {total} transitions across "
+                f"{len(pool.active_scene_ids)} scenes — "
+                f"{n_updates} gradient updates.",
+                color="cyan",
+            )
+            t_start = time.time()
+            for _ in range(n_updates):
+                batch = pool.sample_batch(self.batch_size)
+                episodic_batch = self.get_episodic_batch(current_task_idx)
+                results = self.learn_on_batch(
+                    tf.constant(current_task_idx), batch, episodic_batch
+                )
+                self._log_after_update(results)
+            self.logger.log(
+                f"[session-flush] Done in {time.time() - t_start:.2f}s.",
+                color="cyan",
+            )
+        else:
+            self.logger.log(
+                f"[session-flush] Only {total} transitions — skipping updates.",
+                color="yellow",
+            )
+
+        # Fire CL hooks with a full session's worth of data.
+        self.on_task_end(current_task_idx)
+        flushed = pool.flush_all()
+        self.logger.log(
+            f"[session-flush] Flushed {flushed} transitions.", color="cyan"
         )
 
     # ------------------------------------------------------------------
@@ -563,8 +638,10 @@ class SAC(BenchmarkAgent):
         self.logger.log_tabular("train/loss_q2", average_only=True)
         self.logger.log_tabular("train/loss_kl", average_only=True)
         self.logger.log_tabular("train/loss_reg", average_only=True)
+        from mariha.env.wrappers.action import ACTION_NAMES
         for i, count in action_counts.items():
-            self.logger.log_tabular(f"train/actions/{i}", count)
+            name = ACTION_NAMES[i] if i < len(ACTION_NAMES) else str(i)
+            self.logger.log_tabular(f"train/actions/{name}", count)
         self.logger.log_tabular("walltime", time.time() - self.start_time)
         self.logger.dump_tabular()
 
@@ -574,7 +651,7 @@ class SAC(BenchmarkAgent):
 
     def save_model(self, current_task_idx: int) -> None:
         """Save actor and critic weights to disk."""
-        method = self.cl_method or "sac"
+        method = self.algorithm or "sac"
         ts = self.timestamp or ""
         model_dir = str(self.experiment_dir / "checkpoints" / method / f"{ts}_task{current_task_idx}")
         self.logger.log(f"Saving model to {model_dir}", color="crimson")
@@ -604,6 +681,129 @@ class SAC(BenchmarkAgent):
         self.load_model(str(directory))
 
     # ------------------------------------------------------------------
+    # Burn-in
+    # ------------------------------------------------------------------
+
+    def burn_in(self, burn_in_spec, num_steps: int) -> None:
+        """Pre-train on a single scene to warm up the replay buffer and policy.
+
+        Repeatedly resets and plays ``burn_in_spec`` until *num_steps*
+        transitions are collected.  Standard SAC updates run during burn-in.
+        After completion the replay buffer is flushed.
+
+        No CL hooks fire during burn-in and the data does not count toward
+        CL metrics.
+
+        Args:
+            burn_in_spec: ``EpisodeSpec`` for the burn-in scene.
+            num_steps: Total environment steps to collect.
+        """
+        from mariha.env.continual import make_scene_env
+        from mariha.env.scenario_gen import load_metadata
+        from mariha.env.base import SCENARIOS_DIR
+
+        scene_id = burn_in_spec.scene_id
+        self.logger.log(
+            f"[burn-in] Starting burn-in on '{scene_id}' for {num_steps} steps.",
+            color="cyan",
+        )
+
+        # Close the main env — stable-retro allows only one emulator per process.
+        # Remember which scene to rebuild afterward.
+        _reopen_scene = self.env._current_scene_id or self.env._next_spec.scene_id
+        self.env.close()
+
+        # Build a dedicated env for burn-in.
+        scene_meta = load_metadata(SCENARIOS_DIR)
+        exit_point = scene_meta[scene_id]["exit_point"]
+        burn_env = make_scene_env(
+            scene_id=scene_id,
+            exit_point=exit_point,
+            scene_ids=self.scene_ids,
+            render_mode=None,
+        )
+
+        # Compile the update function for the burn-in scene.
+        task_idx = (
+            self.scene_ids.index(scene_id) if scene_id in self.scene_ids else 0
+        )
+        self.learn_on_batch = self.get_learn_on_batch(task_idx)
+
+        obs, info = burn_env.reset(episode_spec=burn_in_spec)
+        one_hot_vec = info["task_one_hot"]
+
+        episode_return = 0.0
+        episode_len = 0
+        episodes = 0
+        step = 0
+        t_start = time.time()
+
+        while step < num_steps:
+            # Action selection: random until start_steps, then policy.
+            if step < self.start_steps:
+                action = burn_env.action_space.sample()
+            else:
+                action = self.get_action_numpy(obs, one_hot_vec)
+
+            next_obs, reward, terminated, truncated, _info = burn_env.step(action)
+            done = terminated or truncated
+            episode_return += reward
+            episode_len += 1
+
+            done_to_store = terminated  # truncation != terminal for replay
+            self.replay_buffer.store(
+                obs, action, reward, next_obs, done_to_store, one_hot_vec
+            )
+            obs = next_obs
+
+            if done:
+                episodes += 1
+                self.logger.log(
+                    f"[burn-in] Ep {episodes:4d} | return={episode_return:7.2f} | "
+                    f"len={episode_len:4d} | step={step}/{num_steps}"
+                )
+                episode_return = 0.0
+                episode_len = 0
+                obs, info = burn_env.reset(episode_spec=burn_in_spec)
+                one_hot_vec = info["task_one_hot"]
+
+            # Policy update.
+            if (
+                step >= self.update_after
+                and step % self.update_every == 0
+                and self.replay_buffer.size >= self.batch_size
+            ):
+                for _ in range(self.n_updates):
+                    batch = self.replay_buffer.sample_batch(self.batch_size)
+                    results = self.learn_on_batch(
+                        tf.constant(task_idx), batch, None
+                    )
+                    self._log_after_update(results)
+
+            step += 1
+
+        burn_env.close()
+
+        # Re-open the main ContinualLearningEnv for the curriculum.
+        self.env._build_env(_reopen_scene)
+
+        elapsed = time.time() - t_start
+        self.logger.log(
+            f"[burn-in] Complete — {step} steps, {episodes} episodes in {elapsed:.1f}s.",
+            color="cyan",
+        )
+
+        # Flush the buffer so burn-in data doesn't contaminate the curriculum.
+        self._init_replay_buffer()
+
+        # Set post-burn-in update_after.
+        self.update_after = self.post_burn_in_update_after
+        self.logger.log(
+            f"[burn-in] update_after set to {self.update_after} for curriculum.",
+            color="cyan",
+        )
+
+    # ------------------------------------------------------------------
     # BenchmarkAgent config interface
     # ------------------------------------------------------------------
 
@@ -612,14 +812,6 @@ class SAC(BenchmarkAgent):
         """Add SAC and CL-method hyperparameters to ``parser``."""
         from mariha.replay.buffers import BufferType
         from mariha.utils.running import float_or_str, sci2int, str2bool
-
-        # CL method selection (None = vanilla SAC)
-        parser.add_argument(
-            "--cl_method", type=str, default=None,
-            choices=[None, "l2", "ewc", "mas", "si", "owl", "packnet",
-                     "agem", "vcl", "der", "clonex", "multitask"],
-            help="Continual learning method (None = vanilla SAC).",
-        )
 
         # SAC core
         parser.add_argument("--gamma", type=float, default=0.99)
@@ -672,12 +864,7 @@ class SAC(BenchmarkAgent):
 
     @classmethod
     def from_args(cls, args: argparse.Namespace, env, logger, scene_ids: list) -> "SAC":
-        """Construct a SAC (or CL-method subclass) from parsed CLI args.
-
-        Dispatches on ``args.cl_method`` to instantiate the correct subclass.
-        All SAC-based CL methods inherit this classmethod and are instantiated
-        here rather than each implementing their own ``from_args``.
-        """
+        """Construct a SAC (or subclass) from parsed CLI args."""
         from mariha.rl import models
         from mariha.replay.buffers import BufferType
         from mariha.utils.running import get_activation_from_str, get_readable_timestamp
@@ -698,7 +885,7 @@ class SAC(BenchmarkAgent):
             env=env,
             logger=logger,
             scene_ids=scene_ids,
-            cl_method=getattr(args, "cl_method", None),
+            algorithm=getattr(args, "algorithm", None),
             policy_kwargs=policy_kwargs,
             seed=getattr(args, "seed", 0),
             log_every=getattr(args, "log_every", 1000),
@@ -723,49 +910,16 @@ class SAC(BenchmarkAgent):
             clipnorm=getattr(args, "clipnorm", None),
             agent_policy_exploration=getattr(args, "agent_policy_exploration", False),
             render_every=getattr(args, "render_every", 0),
+            post_burn_in_update_after=getattr(args, "post_burn_in_update_after", 0),
+            buffer_mode=getattr(args, "buffer_mode", "single"),
+            per_scene_capacity=getattr(args, "per_scene_capacity", 1000),
+            flush_on=getattr(args, "flush_on", "session"),
+            cl_hook_min_transitions=getattr(args, "cl_hook_min_transitions", 500),
             experiment_dir=experiment_dir,
             timestamp=timestamp,
         )
 
-        cl_method = getattr(args, "cl_method", None)
-        if cl_method is None:
-            return cls(**sac_kwargs)
-
-        method = cl_method.lower()
-        if method == "l2":
-            from mariha.methods.l2 import L2_SAC
-            return L2_SAC(**sac_kwargs)
-        if method == "ewc":
-            from mariha.methods.ewc import EWC_SAC
-            return EWC_SAC(**sac_kwargs)
-        if method == "mas":
-            from mariha.methods.mas import MAS_SAC
-            return MAS_SAC(**sac_kwargs)
-        if method == "si":
-            from mariha.methods.si import SI_SAC
-            return SI_SAC(**sac_kwargs)
-        if method == "owl":
-            from mariha.methods.owl import OWL_SAC
-            return OWL_SAC(**sac_kwargs)
-        if method == "packnet":
-            from mariha.methods.packnet import PackNet_SAC
-            return PackNet_SAC(**sac_kwargs)
-        if method == "agem":
-            from mariha.methods.agem import AGEM_SAC
-            return AGEM_SAC(**sac_kwargs)
-        if method == "vcl":
-            from mariha.methods.vcl import VCL_SAC
-            return VCL_SAC(**sac_kwargs)
-        if method in ("der", "der++"):
-            from mariha.methods.der import DER_SAC
-            return DER_SAC(**sac_kwargs)
-        if method == "clonex":
-            from mariha.methods.clonex import ClonEx_SAC
-            return ClonEx_SAC(**sac_kwargs)
-        if method == "multitask":
-            from mariha.methods.multitask import MultiTask_SAC
-            return MultiTask_SAC(**sac_kwargs)
-        raise ValueError(f"Unknown cl_method: '{cl_method}'")
+        return cls(**sac_kwargs)
 
     # ------------------------------------------------------------------
     # Main training loop
@@ -784,6 +938,7 @@ class SAC(BenchmarkAgent):
 
         one_hot_vec: np.ndarray = info["task_one_hot"]
         current_scene_id: str = info.get("scene_id", "")
+        current_session: str = info.get("session", "")
         current_task_idx: int = (
             self.scene_ids.index(current_scene_id)
             if current_scene_id in self.scene_ids
@@ -823,7 +978,15 @@ class SAC(BenchmarkAgent):
             # For truncated episodes (timeout), don't store done=True — the
             # episode didn't actually end; the budget just ran out.
             done_to_store = terminated
-            self.replay_buffer.store(obs, action, reward, next_obs, done_to_store, one_hot_vec)
+            if self.buffer_mode == "per_scene":
+                self.replay_buffer.store(
+                    current_scene_id, obs, action, reward, next_obs,
+                    done_to_store, one_hot_vec,
+                )
+            else:
+                self.replay_buffer.store(
+                    obs, action, reward, next_obs, done_to_store, one_hot_vec,
+                )
             obs = next_obs
 
             # ---- end of episode ----
@@ -863,10 +1026,30 @@ class SAC(BenchmarkAgent):
 
                 one_hot_vec = info["task_one_hot"]
                 new_scene_id = info.get("scene_id", "")
+                new_session = info.get("session", "")
+
+                # Session boundary flush (per-scene buffer mode only).
+                if (
+                    self.buffer_mode == "per_scene"
+                    and self.flush_on == "session"
+                    and info.get("session_switch", False)
+                ):
+                    self._handle_session_boundary(current_task_idx)
 
                 if info.get("task_switch", False):
-                    # On task_switch: run on_task_end for previous, then handle change.
-                    self.on_task_end(current_task_idx)
+                    # Gate CL hooks on minimum transitions in per-scene mode.
+                    if self.buffer_mode == "per_scene":
+                        buf_size = self.replay_buffer.total_size
+                        if buf_size >= self.cl_hook_min_transitions:
+                            self.on_task_end(current_task_idx)
+                        else:
+                            self.logger.log(
+                                f"[CL] Skipping on_task_end — only {buf_size} "
+                                f"transitions (need {self.cl_hook_min_transitions}).",
+                                color="yellow",
+                            )
+                    else:
+                        self.on_task_end(current_task_idx)
                     new_task_idx = (
                         self.scene_ids.index(new_scene_id)
                         if new_scene_id in self.scene_ids
@@ -877,6 +1060,8 @@ class SAC(BenchmarkAgent):
                     current_scene_id = new_scene_id
                     if not self.agent_policy_exploration:
                         task_timestep = 0
+
+                current_session = new_session
 
             # ---- policy update ----
             if (

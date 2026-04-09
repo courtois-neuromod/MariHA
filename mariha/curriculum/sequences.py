@@ -110,61 +110,45 @@ class HumanSequence(BaseSequence):
 
 
 # ---------------------------------------------------------------------------
-# Future sequence stubs (not implemented in MVP)
+# Budget override
 # ---------------------------------------------------------------------------
 
-# These classes are placeholders that document the intended interface for
-# synthetic sequences.  Raise NotImplementedError to surface clearly if
-# accidentally used before implementation.
 
+class BudgetOverrideSequence(BaseSequence):
+    """Wraps any sequence and overrides ``max_steps`` on each episode spec.
 
-class LevelSequence(BaseSequence):
-    """Sequence filtered to a single Mario level (future).
+    Exactly one of *fixed_steps* or *multiplier* must be provided.
 
     Args:
-        subject_id: Subject identifier.
-        level: Level string (e.g. ``'w1l1'``).
+        inner: The base sequence to wrap.
+        fixed_steps: If set, override all ``max_steps`` to this value.
+        multiplier: If set, scale each ``max_steps`` by this factor.
     """
 
-    def __init__(self, subject_id: str, level: str) -> None:
-        self._subject_id = subject_id
-        self._level = level
-        super().__init__()
-
-    def _build(self) -> list[EpisodeSpec]:
-        raise NotImplementedError("LevelSequence is not yet implemented.")
-
-
-class PatternSequence(BaseSequence):
-    """Sequence filtered by game-design pattern (future).
-
-    Args:
-        subject_id: Subject identifier.
-        pattern: Pattern column name from ``scenes_mastersheet.csv``
-            (e.g. ``'Gap'``, ``'Enemy'``).
-    """
-
-    def __init__(self, subject_id: str, pattern: str) -> None:
-        self._subject_id = subject_id
-        self._pattern = pattern
-        super().__init__()
-
-    def _build(self) -> list[EpisodeSpec]:
-        raise NotImplementedError("PatternSequence is not yet implemented.")
-
-
-class ExpandedBudgetSequence(BaseSequence):
-    """Human sequence with the per-episode frame budget scaled up (future).
-
-    Args:
-        subject_id: Subject identifier.
-        multiplier: Factor by which to multiply each clip's ``max_steps``.
-    """
-
-    def __init__(self, subject_id: str, multiplier: float) -> None:
-        self._subject_id = subject_id
+    def __init__(
+        self,
+        inner: BaseSequence,
+        fixed_steps: int | None = None,
+        multiplier: float | None = None,
+    ) -> None:
+        if fixed_steps is None and multiplier is None:
+            raise ValueError("Provide either fixed_steps or multiplier.")
+        if fixed_steps is not None and multiplier is not None:
+            raise ValueError("fixed_steps and multiplier are mutually exclusive.")
+        self._inner = inner
+        self._fixed_steps = fixed_steps
         self._multiplier = multiplier
         super().__init__()
 
     def _build(self) -> list[EpisodeSpec]:
-        raise NotImplementedError("ExpandedBudgetSequence is not yet implemented.")
+        from copy import copy
+
+        out: list[EpisodeSpec] = []
+        for spec in self._inner:
+            s = copy(spec)
+            if self._fixed_steps is not None:
+                s.max_steps = max(1, self._fixed_steps)
+            elif self._multiplier is not None:
+                s.max_steps = max(1, int(s.max_steps * self._multiplier))
+            out.append(s)
+        return out

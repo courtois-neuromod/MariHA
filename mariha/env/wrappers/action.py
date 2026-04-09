@@ -66,6 +66,18 @@ _ACTION_MAP: list[list[int]] = [
 
 N_ACTIONS = len(_ACTION_MAP)
 
+ACTION_NAMES: list[str] = [
+    "NOOP",
+    "RIGHT",
+    "RIGHT+A",
+    "RIGHT+B",
+    "RIGHT+A+B",
+    "LEFT",
+    "LEFT+A",
+    "LEFT+B",
+    "A",
+]
+
 def _buttons_to_array(buttons: list[int]) -> np.ndarray:
     """Convert a list of pressed button indices to a MultiBinary array.
 

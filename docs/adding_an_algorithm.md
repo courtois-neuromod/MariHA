@@ -66,13 +66,13 @@ register("myalgo")(MyAlgo)
 ### 3. Run training
 
 ```bash
-mariha-run --algorithm myalgo --subject sub-01 --seed 0
+mariha-run-cl --algorithm myalgo --subject sub-01 --seed 0
 ```
 
 Pass your own hyperparameter flags if you defined them in `add_args`:
 
 ```bash
-mariha-run --algorithm myalgo --subject sub-01 --my_lr 1e-4 --my_param 42
+mariha-run-cl --algorithm myalgo --subject sub-01 --my_lr 1e-4 --my_param 42
 ```
 
 ### 4. Run evaluation
@@ -211,7 +211,7 @@ register("random")(RandomAgent)
 Run it:
 
 ```bash
-mariha-run --algorithm random --subject sub-01 --seed 0
+mariha-run-cl --algorithm random --subject sub-01 --seed 0
 mariha-evaluate --algorithm random --subject sub-01 --run_prefix <timestamp>
 ```
 
@@ -314,5 +314,5 @@ With `--eval_diagonal`, `cl_metrics` also includes `BWT`, `forgetting`, and
 - [ ] Create `mariha/rl/myalgo/agent.py` implementing `BenchmarkAgent`
 - [ ] Implement `get_action`, `run`, `save_checkpoint`, `load_checkpoint`, `from_args`
 - [ ] Add `register("myalgo")(MyAlgo)` to `mariha/rl/__init__.py`
-- [ ] Test: `mariha-run --algorithm myalgo --subject sub-01 --seed 0`
+- [ ] Test: `mariha-run-cl --algorithm myalgo --subject sub-01 --seed 0`
 - [ ] Evaluate: `mariha-evaluate --algorithm myalgo --subject sub-01 --run_prefix <ts>`

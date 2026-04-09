@@ -54,13 +54,16 @@ cd data/mario.scenes && git annex get sub-*/
 ### Train (full CL curriculum)
 
 ```bash
-mariha-run-cl --subject sub-01 --cl_method ewc --seed 0
+mariha-run-cl --algorithm sac --subject sub-01 --seed 0
+mariha-run-cl --algorithm ewc --subject sub-01 --seed 0
+mariha-run-cl --algorithm ppo --subject sub-01 --seed 0
+mariha-run-cl --algorithm dqn --subject sub-01 --seed 0
 ```
 
 Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time:
 
 ```bash
-mariha-run-cl --subject sub-01 --cl_method ewc --seed 0 --render_every 100
+mariha-run-cl --algorithm ewc --subject sub-01 --seed 0 --render_every 100
 ```
 
 ### Train (single scene, for debugging)
@@ -80,7 +83,7 @@ mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10
 ```bash
 mariha-evaluate \
   --subject sub-01 \
-  --cl_method ewc \
+  --algorithm ewc \
   --run_prefix <timestamp_seed0> \
   --n_episodes 5 \
   --eval_diagonal          # adds BWT / forgetting metrics
@@ -90,11 +93,15 @@ Outputs `experiments/sub-01/ewc/<run_prefix>/eval_results.json`.
 
 ---
 
-## CL Methods
+## Algorithms
 
-| Flag | Class | Description |
-|------|-------|-------------|
-| *(none)* | `SAC` | Vanilla SAC — fine-tune sequentially |
+| `--algorithm` | Class | Description |
+|---------------|-------|-------------|
+| `sac` | `SAC` | Vanilla SAC — fine-tune sequentially |
+| `ppo` | `PPO` | Proximal Policy Optimization (on-policy) |
+| `dqn` | `DQN` | Deep Q-Network (epsilon-greedy) |
+| `ddqn` | `DQN` | Double DQN (alias for `dqn` with `--double_dqn=True`) |
+| `random` | `RandomAgent` | Random action baseline |
 | `l2` | `L2_SAC` | L2 regularisation (uniform importance) |
 | `ewc` | `EWC_SAC` | Elastic Weight Consolidation (Fisher diagonal) |
 | `mas` | `MAS_SAC` | Memory Aware Synapses (output sensitivity) |
@@ -131,9 +138,9 @@ MariHA/
 ├── mariha/
 │   ├── curriculum/    # EpisodeSpec, HumanSequence loader
 │   ├── env/           # MarioEnv, SceneEnv, ContinualLearningEnv, wrappers
-│   ├── replay/        # FIFO, Reservoir, PER, EpisodicMemory buffers
-│   ├── rl/            # SAC training loop, MlpActor/MlpCritic models
-│   ├── methods/       # 12 CL baseline implementations
+│   ├── replay/        # FIFO, Reservoir, PER, EpisodicMemory, Rollout buffers
+│   ├── rl/            # SAC, PPO, DQN training loops + network architectures
+│   ├── methods/       # 12 CL baseline implementations (SAC-based)
 │   └── eval/          # CL metrics, eval runner
 ├── scripts/
 │   ├── run_cl.py      # Full CL training (mariha-run-cl)

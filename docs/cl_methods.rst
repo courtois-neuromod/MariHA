@@ -8,13 +8,13 @@ are grouped below by mechanism.
 Selecting a method
 ------------------
 
-Pass ``--cl_method <name>`` to ``mariha-run-cl``:
+Pass ``--algorithm <name>`` to ``mariha-run-cl``:
 
 .. code-block:: bash
 
-   mariha-run-cl --subject sub-01 --cl_method ewc --seed 0
+   mariha-run-cl --algorithm ewc --subject sub-01 --seed 0
 
-Use ``None`` (default, omit the flag) for vanilla SAC — sequential
+Omit ``--algorithm`` (defaults to ``sac``) for vanilla SAC — sequential
 fine-tuning with no forgetting prevention.
 
 .. _regularisation-methods:

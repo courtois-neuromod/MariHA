@@ -174,7 +174,7 @@ Live render checkpoints
 
 Pass ``--render_every N`` to open a live window every *N* training episodes
 and watch the agent play one full greedy episode.  Works for both
-``mariha-run-single`` and ``mariha-run`` (full CL curriculum):
+``mariha-run-single`` and ``mariha-run-cl`` (full CL curriculum):
 
 .. code-block:: bash
 
@@ -182,7 +182,7 @@ and watch the agent play one full greedy episode.  Works for both
    mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
 
    # Full CL run
-   mariha-run --subject sub-01 --cl_method ewc --render_every 100
+   mariha-run-cl --algorithm ewc --subject sub-01 --render_every 100
 
 Training pauses, the window opens, the episode plays to termination, then
 the window closes and training resumes.  The underlying implementation

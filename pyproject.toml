@@ -45,7 +45,6 @@ dev = [
 ]
 
 [project.scripts]
-mariha-run              = "scripts.run_benchmark:main"
 mariha-generate-scenarios = "scripts.generate_scenarios:main"
 mariha-run-single       = "scripts.run_single:main"
 mariha-run-cl           = "scripts.run_cl:main"

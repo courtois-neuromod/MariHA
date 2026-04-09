@@ -172,6 +172,7 @@ class ContinualLearningEnv:
         self._current_spec: Any = None  # spec of the episode currently being played
         self._episode_count: int = 0
         self._done: bool = False
+        self._current_session: str | None = None
 
         # Prefetch the first spec so we can set up observation/action spaces.
         self._prefetch_next()
@@ -232,6 +233,12 @@ class ContinualLearningEnv:
 
         obs, info = self._env.reset(episode_spec=spec, seed=seed)
         info["task_switch"] = task_switch
+        info["session"] = spec.session
+        info["session_switch"] = (
+            self._current_session is not None
+            and spec.session != self._current_session
+        )
+        self._current_session = spec.session
         info["episode_index"] = self._episode_count
 
         self._episode_count += 1

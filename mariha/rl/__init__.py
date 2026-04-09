@@ -1,14 +1,14 @@
 """Built-in algorithm registry for MariHA.
 
-Importing this module registers all built-in algorithms (SAC, SAC-based CL
-variants, and RandomAgent) in ``mariha.benchmark.registry``.
+Importing this module registers all built-in algorithms (SAC, PPO, DQN,
+SAC-based CL variants, and RandomAgent) in ``mariha.benchmark.registry``.
 
 Any script that needs to look up an algorithm by name should import this
 module first::
 
     import mariha.rl  # registers all built-in algorithms
     from mariha.benchmark.registry import get_agent_class
-    agent_cls = get_agent_class("ewc")
+    agent_cls = get_agent_class("ppo")
 """
 
 from mariha.benchmark.registry import register
@@ -16,6 +16,15 @@ from mariha.benchmark.registry import register
 # Base SAC
 from mariha.rl.sac import SAC
 register("sac")(SAC)
+
+# PPO
+from mariha.rl.ppo import PPO
+register("ppo")(PPO)
+
+# DQN / DDQN
+from mariha.rl.dqn import DQN
+register("dqn")(DQN)
+register("ddqn")(DQN)  # alias — double_dqn=True by default
 
 # Random baseline
 from mariha.rl.random.agent import RandomAgent
@@ -49,6 +58,8 @@ register("multitask")(MultiTask_SAC)
 
 __all__ = [
     "SAC",
+    "PPO",
+    "DQN",
     "RandomAgent",
     "L2_SAC",
     "EWC_SAC",

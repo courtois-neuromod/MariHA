@@ -52,8 +52,8 @@ Training — full CL curriculum
 .. code-block:: bash
 
    mariha-run-cl \
+     --algorithm  ewc \
      --subject    sub-01 \
-     --cl_method  ewc \
      --seed       0
 
 This trains the agent on the full ordered sequence of scenes from subject
@@ -72,9 +72,9 @@ Key training arguments:
    * - ``--subject``
      - *(required)*
      - Subject ID: ``sub-01``, ``sub-02``, ``sub-03``, ``sub-05``, ``sub-06``
-   * - ``--cl_method``
-     - ``None``
-     - CL baseline name (see :doc:`cl_methods`).  ``None`` = vanilla SAC.
+   * - ``--algorithm``
+     - ``sac``
+     - Algorithm name (see :doc:`cl_methods`).  Supports ``sac``, ``ppo``, ``dqn``, and all CL methods.
    * - ``--seed``
      - ``0``
      - Global random seed.
@@ -134,7 +134,7 @@ After training, evaluate the saved checkpoints:
 
    mariha-evaluate \
      --subject     sub-01 \
-     --cl_method   ewc \
+     --algorithm   ewc \
      --run_prefix  20260322_120000_seed0 \
      --n_episodes  5 \
      --eval_diagonal

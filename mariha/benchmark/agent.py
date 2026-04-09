@@ -112,6 +112,17 @@ class BenchmarkAgent(ABC):
     # Lifecycle hooks (optional — default no-ops)
     # ------------------------------------------------------------------
 
+    def burn_in(self, burn_in_spec, num_steps: int) -> None:
+        """Optional pre-training phase on a single scene.
+
+        Repeatedly plays ``burn_in_spec`` until ``num_steps`` transitions
+        are collected.  Default implementation is a no-op.
+
+        Args:
+            burn_in_spec: ``EpisodeSpec`` for the burn-in scene.
+            num_steps: Total environment steps to collect.
+        """
+
     def on_task_start(self, task_idx: int, scene_id: str) -> None:
         """Called at the beginning of each new task.
 

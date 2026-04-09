@@ -7,13 +7,13 @@ Usage::
 
     python scripts/evaluate.py \\
         --subject sub-01 \\
-        --cl_method ewc \\
+        --algorithm ewc \\
         --run_prefix 20260322_120000_seed0 \\
         --n_episodes 5
 
 Or with the installed entry point::
 
-    mariha-evaluate --subject sub-01 --cl_method ewc --run_prefix ...
+    mariha-evaluate --subject sub-01 --algorithm ewc --run_prefix ...
 
 Outputs a ``results.json`` in the run directory containing:
 
@@ -81,13 +81,7 @@ def build_eval_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--algorithm",
         default="sac",
-        help="Algorithm name (from registry). Replaces --cl_method.",
-    )
-    p.add_argument(
-        "--cl_method",
-        default=None,
-        help="Deprecated: use --algorithm instead. "
-             "If provided, overrides --algorithm for backwards compatibility.",
+        help="Algorithm name (from registry).",
     )
     p.add_argument(
         "--run_prefix",
@@ -161,8 +155,7 @@ def main() -> None:
     args = parser.parse_args()
 
     experiment_dir = Path(args.experiment_dir)
-    # --cl_method overrides --algorithm for backwards compatibility
-    method_name = args.cl_method or args.algorithm
+    method_name = args.algorithm
     checkpoint_base = experiment_dir / "checkpoints" / method_name
 
     # ------------------------------------------------------------------ #
