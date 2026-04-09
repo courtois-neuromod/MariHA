@@ -141,6 +141,7 @@ class SAC(BenchmarkAgent):
         reset_critic_on_task_change: bool = False,
         clipnorm: Optional[float] = None,
         agent_policy_exploration: bool = False,
+        render_every: int = 0,
         experiment_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
@@ -174,6 +175,7 @@ class SAC(BenchmarkAgent):
         self.reset_critic_on_task_change = reset_critic_on_task_change
         self.clipnorm = clipnorm
         self.agent_policy_exploration = agent_policy_exploration
+        self.render_every = int(render_every)
         self.experiment_dir = experiment_dir or Path("experiments")
         self.timestamp = timestamp
 
@@ -660,6 +662,13 @@ class SAC(BenchmarkAgent):
         parser.add_argument("--save_freq_epochs", type=int, default=25)
         parser.add_argument("--scene_id", type=str, default=None,
                             help="(run_single only) Single scene ID to train on.")
+        parser.add_argument(
+            "--render_every", type=int, default=0,
+            help=(
+                "If > 0, open a live window and play one full greedy episode every "
+                "this many training episodes (a checkpoint render). 0 = disabled."
+            ),
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace, env, logger, scene_ids: list) -> "SAC":
@@ -713,6 +722,7 @@ class SAC(BenchmarkAgent):
             reset_critic_on_task_change=getattr(args, "reset_critic_on_task_change", False),
             clipnorm=getattr(args, "clipnorm", None),
             agent_policy_exploration=getattr(args, "agent_policy_exploration", False),
+            render_every=getattr(args, "render_every", 0),
             experiment_dir=experiment_dir,
             timestamp=timestamp,
         )
@@ -835,6 +845,13 @@ class SAC(BenchmarkAgent):
 
                 episode_return = 0.0
                 episode_len = 0
+
+                if self.render_every > 0 and episodes % self.render_every == 0:
+                    self.logger.log(
+                        f"[render] episode {episodes} — opening live window...",
+                        color="cyan",
+                    )
+                    self.env.render_checkpoint(self.get_action_numpy)
 
                 if self.env.is_done:
                     break

@@ -90,6 +90,10 @@ Key training arguments:
    * - ``--n_updates``
      - ``50``
      - Gradient steps per update round.
+   * - ``--render_every``
+     - ``0``
+     - Open a live window every this many episodes to watch the agent play
+       one full greedy episode. ``0`` = disabled.
 
 Training — single scene (debugging)
 -------------------------------------
@@ -97,6 +101,29 @@ Training — single scene (debugging)
 .. code-block:: bash
 
    mariha-run-single --scene_id w1l1s0 --seed 0
+
+Pass ``--render_every N`` to open a live window and watch one full greedy
+episode every *N* training episodes — useful for checking progress at a
+glance without slowing down training:
+
+.. code-block:: bash
+
+   mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 50
+
+.. list-table::
+   :widths: 25 10 65
+   :header-rows: 1
+
+   * - Argument
+     - Default
+     - Description
+   * - ``--total_steps``
+     - ``200000``
+     - Total environment steps for single-scene training.
+   * - ``--render_every``
+     - ``0``
+     - If > 0, open a live window every this many episodes to watch the
+       agent play one full greedy episode. ``0`` = disabled.
 
 Evaluation
 ----------
