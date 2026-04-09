@@ -218,7 +218,7 @@ def main() -> None:
             if args.render_every > 0 and episodes % args.render_every == 0:
                 pbar.write(f"[render] episode {episodes} — opening live window...")
                 env.close()
-                play_render_episode(actor_fn=_actor_fn, spec=next(spec_cycle), **env_kwargs)
+                play_render_episode(actor_fn=_actor_fn, spec=next(spec_cycle), render_speed=args.render_speed, **env_kwargs)
                 env = make_scene_env(**env_kwargs, render_mode=args.render_mode)
 
             obs, info = env.reset(episode_spec=next(spec_cycle))

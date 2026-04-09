@@ -80,5 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Logging backends: tsv, tensorboard, wandb.")
     p.add_argument("--render_mode", type=str, default=None,
                    help="Render mode for MarioEnv (None or 'human').")
+    p.add_argument("--render_speed", type=float, default=1.0,
+                   help="Render speed multiplier. 1 = 60 fps, 0.5 = 30 fps, "
+                        "10 = 600 fps (best effort).")
 
     return p

@@ -94,6 +94,7 @@ def play_render_episode(
     spec,
     stimuli_path: Path = STIMULI_PATH,
     scenarios_dir: Path = SCENARIOS_DIR,
+    render_speed: float = 1.0,
 ) -> None:
     """Create a human-render env, play one greedy episode with the given policy, close it.
 
@@ -110,7 +111,11 @@ def play_render_episode(
         spec: ``EpisodeSpec`` to load as the starting state.
         stimuli_path: Override for stimuli directory.
         scenarios_dir: Override for scenario files directory.
+        render_speed: Speed multiplier. 1 = 60 fps, 0.5 = 30 fps,
+            10 = 600 fps (best effort).
     """
+    import time
+
     render_env = make_scene_env(
         scene_id=scene_id,
         exit_point=exit_point,
@@ -121,11 +126,17 @@ def play_render_episode(
     )
     obs, info = render_env.reset(episode_spec=spec)
     one_hot = info["task_one_hot"]
+    target_dt = 1.0 / (render_speed * 60.0)
     done = False
     while not done:
+        t0 = time.monotonic()
         action = actor_fn(obs, one_hot)
         obs, _, terminated, truncated, _ = render_env.step(action)
         done = terminated or truncated
+        elapsed = time.monotonic() - t0
+        sleep_time = target_dt - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
     render_env.close()
 
 
@@ -144,6 +155,7 @@ class ContinualLearningEnv:
         sequence: A ``BaseSequence`` (or any iterable of ``EpisodeSpec``).
         scene_ids: Ordered list of all valid scene IDs.
         render_mode: Render mode for ``MarioEnv``.
+        render_speed: Speed multiplier for rendering (1 = 60 fps).
         stimuli_path: Override for the stimuli directory.
         scenarios_dir: Override for the scenario files directory.
     """
@@ -153,12 +165,14 @@ class ContinualLearningEnv:
         sequence: Any,
         scene_ids: list[str],
         render_mode: str | None = None,
+        render_speed: float = 1.0,
         stimuli_path: Path = STIMULI_PATH,
         scenarios_dir: Path = SCENARIOS_DIR,
     ) -> None:
         self._sequence_iter: Iterator = iter(sequence)
         self._scene_ids = scene_ids
         self._render_mode = render_mode
+        self._render_speed = render_speed
         self._stimuli_path = stimuli_path
         self._scenarios_dir = scenarios_dir
 
@@ -317,6 +331,7 @@ class ContinualLearningEnv:
             spec=self._current_spec,
             stimuli_path=self._stimuli_path,
             scenarios_dir=self._scenarios_dir,
+            render_speed=self._render_speed,
         )
         self._build_env(self._current_scene_id)
 
