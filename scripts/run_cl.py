@@ -81,7 +81,14 @@ def main() -> None:
                 color="yellow",
             )
         else:
-            agent.burn_in(burn_in_spec, burn_in_steps)
+            # stable-retro allows only one emulator per process, so
+            # release the main env's inner scene env while burn-in
+            # builds its own, then rebuild afterward.
+            env.release_emulator()
+            try:
+                agent.burn_in(burn_in_spec, burn_in_steps)
+            finally:
+                env.reacquire_emulator()
 
     agent.run()
     env.close()

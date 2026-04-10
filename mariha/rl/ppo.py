@@ -397,40 +397,41 @@ class PPO(BenchmarkAgent):
             render_mode=None,
         )
 
-        obs, info = burn_env.reset(episode_spec=burn_in_spec)
-        one_hot_vec = info["task_one_hot"]
         step = 0
         episodes = 0
         t_start = time.time()
+        try:
+            obs, info = burn_env.reset(episode_spec=burn_in_spec)
+            one_hot_vec = info["task_one_hot"]
 
-        while step < num_steps:
-            self.rollout_buffer.reset()
-            steps_this_rollout = min(self.rollout_length, num_steps - step)
-            for _ in range(steps_this_rollout):
-                action, log_prob, value = self.get_action_with_info(obs, one_hot_vec)
-                next_obs, reward, terminated, truncated, _info = burn_env.step(action)
-                done = terminated or truncated
-                self.rollout_buffer.store(
-                    obs, action, reward, done, value, log_prob, one_hot_vec
-                )
-                obs = next_obs
-                step += 1
+            while step < num_steps:
+                self.rollout_buffer.reset()
+                steps_this_rollout = min(self.rollout_length, num_steps - step)
+                for _ in range(steps_this_rollout):
+                    action, log_prob, value = self.get_action_with_info(obs, one_hot_vec)
+                    next_obs, reward, terminated, truncated, _info = burn_env.step(action)
+                    done = terminated or truncated
+                    self.rollout_buffer.store(
+                        obs, action, reward, done, value, log_prob, one_hot_vec
+                    )
+                    obs = next_obs
+                    step += 1
 
-                if done:
-                    episodes += 1
-                    obs, info = burn_env.reset(episode_spec=burn_in_spec)
-                    one_hot_vec = info["task_one_hot"]
+                    if done:
+                        episodes += 1
+                        obs, info = burn_env.reset(episode_spec=burn_in_spec)
+                        one_hot_vec = info["task_one_hot"]
 
-            if self.rollout_buffer.ptr > 0:
-                obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
-                one_hot_t = tf.expand_dims(tf.cast(one_hot_vec, tf.float32), 0)
-                _, last_value = self.model(obs_t, one_hot_t)
-                self.rollout_buffer.compute_returns_and_advantages(
-                    float(last_value[0, 0].numpy())
-                )
-                self.update()
-
-        burn_env.close()
+                if self.rollout_buffer.ptr > 0:
+                    obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
+                    one_hot_t = tf.expand_dims(tf.cast(one_hot_vec, tf.float32), 0)
+                    _, last_value = self.model(obs_t, one_hot_t)
+                    self.rollout_buffer.compute_returns_and_advantages(
+                        float(last_value[0, 0].numpy())
+                    )
+                    self.update()
+        finally:
+            burn_env.close()
         self.rollout_buffer.reset()
         self.logger.log(
             f"[burn-in] Complete — {step} steps, {episodes} episodes "

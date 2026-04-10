@@ -288,6 +288,34 @@ class ContinualLearningEnv:
         if self._env is not None:
             self._env.close()
 
+    def release_emulator(self) -> None:
+        """Temporarily close the inner scene env.
+
+        stable-retro allows only one emulator per process, so this must be
+        called before another component creates a separate retro env (e.g.
+        agent burn-in on a different scene). Call ``reacquire_emulator()``
+        afterward to rebuild the inner env at the current/pending scene.
+        """
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+
+    def reacquire_emulator(self) -> None:
+        """Rebuild the inner scene env after ``release_emulator()``.
+
+        Rebuilds at ``_current_scene_id`` if set, otherwise at the pending
+        next scene from the sequence. No-op if the env is already built
+        or no scene is available.
+        """
+        if self._env is not None:
+            return
+        scene_id = self._current_scene_id
+        if scene_id is None and self._next_spec is not None:
+            scene_id = self._next_spec.scene_id
+        if scene_id is None:
+            return
+        self._build_env(scene_id)
+
     @property
     def is_done(self) -> bool:
         """True when the curriculum sequence is exhausted."""

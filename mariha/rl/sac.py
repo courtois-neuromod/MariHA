@@ -708,12 +708,9 @@ class SAC(BenchmarkAgent):
             color="cyan",
         )
 
-        # Close the main env — stable-retro allows only one emulator per process.
-        # Remember which scene to rebuild afterward.
-        _reopen_scene = self.env._current_scene_id or self.env._next_spec.scene_id
-        self.env.close()
-
-        # Build a dedicated env for burn-in.
+        # Build a dedicated env for burn-in. The caller (run_cl.py) is
+        # responsible for releasing/reacquiring the main env around this
+        # call — stable-retro allows only one emulator per process.
         scene_meta = load_metadata(SCENARIOS_DIR)
         exit_point = scene_meta[scene_id]["exit_point"]
         burn_env = make_scene_env(
@@ -729,63 +726,61 @@ class SAC(BenchmarkAgent):
         )
         self.learn_on_batch = self.get_learn_on_batch(task_idx)
 
-        obs, info = burn_env.reset(episode_spec=burn_in_spec)
-        one_hot_vec = info["task_one_hot"]
-
         episode_return = 0.0
         episode_len = 0
         episodes = 0
         step = 0
         t_start = time.time()
 
-        while step < num_steps:
-            # Action selection: random until start_steps, then policy.
-            if step < self.start_steps:
-                action = burn_env.action_space.sample()
-            else:
-                action = self.get_action_numpy(obs, one_hot_vec)
+        try:
+            obs, info = burn_env.reset(episode_spec=burn_in_spec)
+            one_hot_vec = info["task_one_hot"]
 
-            next_obs, reward, terminated, truncated, _info = burn_env.step(action)
-            done = terminated or truncated
-            episode_return += reward
-            episode_len += 1
+            while step < num_steps:
+                # Action selection: random until start_steps, then policy.
+                if step < self.start_steps:
+                    action = burn_env.action_space.sample()
+                else:
+                    action = self.get_action_numpy(obs, one_hot_vec)
 
-            done_to_store = terminated  # truncation != terminal for replay
-            self.replay_buffer.store(
-                obs, action, reward, next_obs, done_to_store, one_hot_vec
-            )
-            obs = next_obs
+                next_obs, reward, terminated, truncated, _info = burn_env.step(action)
+                done = terminated or truncated
+                episode_return += reward
+                episode_len += 1
 
-            if done:
-                episodes += 1
-                self.logger.log(
-                    f"[burn-in] Ep {episodes:4d} | return={episode_return:7.2f} | "
-                    f"len={episode_len:4d} | step={step}/{num_steps}"
+                done_to_store = terminated  # truncation != terminal for replay
+                self.replay_buffer.store(
+                    obs, action, reward, next_obs, done_to_store, one_hot_vec
                 )
-                episode_return = 0.0
-                episode_len = 0
-                obs, info = burn_env.reset(episode_spec=burn_in_spec)
-                one_hot_vec = info["task_one_hot"]
+                obs = next_obs
 
-            # Policy update.
-            if (
-                step >= self.update_after
-                and step % self.update_every == 0
-                and self.replay_buffer.size >= self.batch_size
-            ):
-                for _ in range(self.n_updates):
-                    batch = self.replay_buffer.sample_batch(self.batch_size)
-                    results = self.learn_on_batch(
-                        tf.constant(task_idx), batch, None
+                if done:
+                    episodes += 1
+                    self.logger.log(
+                        f"[burn-in] Ep {episodes:4d} | return={episode_return:7.2f} | "
+                        f"len={episode_len:4d} | step={step}/{num_steps}"
                     )
-                    self._log_after_update(results)
+                    episode_return = 0.0
+                    episode_len = 0
+                    obs, info = burn_env.reset(episode_spec=burn_in_spec)
+                    one_hot_vec = info["task_one_hot"]
 
-            step += 1
+                # Policy update.
+                if (
+                    step >= self.update_after
+                    and step % self.update_every == 0
+                    and self.replay_buffer.size >= self.batch_size
+                ):
+                    for _ in range(self.n_updates):
+                        batch = self.replay_buffer.sample_batch(self.batch_size)
+                        results = self.learn_on_batch(
+                            tf.constant(task_idx), batch, None
+                        )
+                        self._log_after_update(results)
 
-        burn_env.close()
-
-        # Re-open the main ContinualLearningEnv for the curriculum.
-        self.env._build_env(_reopen_scene)
+                step += 1
+        finally:
+            burn_env.close()
 
         elapsed = time.time() - t_start
         self.logger.log(

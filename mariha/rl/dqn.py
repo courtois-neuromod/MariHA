@@ -191,7 +191,10 @@ class DQN(BenchmarkAgent):
         self, obs: np.ndarray, one_hot: np.ndarray, epsilon: float
     ) -> int:
         if np.random.random() < epsilon:
-            return self.env.action_space.sample()
+            # Sample directly from act_dim so this works during burn-in,
+            # when the main env has been released (stable-retro single-
+            # emulator constraint).
+            return int(np.random.randint(0, self.act_dim))
         return self.get_action(obs, one_hot, deterministic=True)
 
     # ------------------------------------------------------------------
@@ -469,43 +472,44 @@ class DQN(BenchmarkAgent):
             render_mode=None,
         )
 
-        obs, info = burn_env.reset(episode_spec=burn_in_spec)
-        one_hot_vec = info["task_one_hot"]
         step = 0
         episodes = 0
         t_start = time.time()
+        try:
+            obs, info = burn_env.reset(episode_spec=burn_in_spec)
+            one_hot_vec = info["task_one_hot"]
 
-        while step < num_steps:
-            epsilon = self._get_epsilon(step)
-            action = self._get_action_eps_greedy(obs, one_hot_vec, epsilon)
-            next_obs, reward, terminated, truncated, _info = burn_env.step(action)
-            done = terminated or truncated
+            while step < num_steps:
+                epsilon = self._get_epsilon(step)
+                action = self._get_action_eps_greedy(obs, one_hot_vec, epsilon)
+                next_obs, reward, terminated, truncated, _info = burn_env.step(action)
+                done = terminated or truncated
 
-            self.replay_buffer.store(
-                obs, action, reward, next_obs, terminated, one_hot_vec
-            )
-            obs = next_obs
+                self.replay_buffer.store(
+                    obs, action, reward, next_obs, terminated, one_hot_vec
+                )
+                obs = next_obs
 
-            if done:
-                episodes += 1
-                obs, info = burn_env.reset(episode_spec=burn_in_spec)
-                one_hot_vec = info["task_one_hot"]
+                if done:
+                    episodes += 1
+                    obs, info = burn_env.reset(episode_spec=burn_in_spec)
+                    one_hot_vec = info["task_one_hot"]
 
-            if (
-                step >= self.update_after
-                and step % self.update_every == 0
-                and self.replay_buffer.size >= self.batch_size
-            ):
-                for _ in range(self.n_updates):
-                    batch = self.replay_buffer.sample_batch(self.batch_size)
-                    self._learn_on_batch(
-                        batch["obs"], batch["actions"], batch["rewards"],
-                        batch["next_obs"], batch["done"], batch["one_hot"],
-                    )
+                if (
+                    step >= self.update_after
+                    and step % self.update_every == 0
+                    and self.replay_buffer.size >= self.batch_size
+                ):
+                    for _ in range(self.n_updates):
+                        batch = self.replay_buffer.sample_batch(self.batch_size)
+                        self._learn_on_batch(
+                            batch["obs"], batch["actions"], batch["rewards"],
+                            batch["next_obs"], batch["done"], batch["one_hot"],
+                        )
 
-            step += 1
-
-        burn_env.close()
+                step += 1
+        finally:
+            burn_env.close()
         self._init_replay_buffer()
         self.update_after = self.post_burn_in_update_after
         self.logger.log(
