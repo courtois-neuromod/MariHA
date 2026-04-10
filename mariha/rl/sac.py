@@ -920,12 +920,7 @@ class SAC(BenchmarkAgent):
 
     def run(self) -> None:
         """Run the full episode-driven training loop until the curriculum is exhausted."""
-        from mariha.utils.progress import NullProgress
-
         self.start_time = time.time()
-        progress = getattr(self.logger, "progress", None) or NullProgress(
-            fallback_log=self.logger.log
-        )
 
         # ---- initialise episode state ----
         try:
@@ -953,50 +948,8 @@ class SAC(BenchmarkAgent):
         task_timestep = 0  # resets on task change if agent_policy_exploration=False
         action_counts = {i: 0 for i in range(self.act_dim)}
 
-        with progress:
-            progress.on_reset(info)
-            progress.on_task_switch(
-                new_scene_id=current_scene_id,
-                task_idx=current_task_idx,
-                total_tasks=len(self.scene_ids),
-            )
-            progress.log("Training started.", color="green")
-            self._run_loop(
-                obs=obs,
-                info=info,
-                one_hot_vec=one_hot_vec,
-                current_scene_id=current_scene_id,
-                current_session=current_session,
-                current_task_idx=current_task_idx,
-                episodes=episodes,
-                episode_return=episode_return,
-                episode_len=episode_len,
-                global_timestep=global_timestep,
-                task_timestep=task_timestep,
-                action_counts=action_counts,
-                progress=progress,
-            )
+        self.logger.log("Training started.", color="green")
 
-    def _run_loop(
-        self,
-        *,
-        obs,
-        info,
-        one_hot_vec,
-        current_scene_id,
-        current_session,
-        current_task_idx,
-        episodes,
-        episode_return,
-        episode_len,
-        global_timestep,
-        task_timestep,
-        action_counts,
-        progress,
-    ) -> None:
-        """Inner training loop, broken out so ``run()`` can wrap it in
-        the progress context manager without re-indenting the entire body.
-        """
         while True:
             # ---- action selection ----
             use_policy = (
@@ -1033,17 +986,6 @@ class SAC(BenchmarkAgent):
             if done:
                 episodes += 1
                 buf_pct = self.replay_buffer.size / self.replay_buffer.max_size * 100
-                stats = self.env.episode_stats
-                progress.on_episode_end(
-                    episode_return=episode_return,
-                    episode_len=episode_len,
-                    terminated=terminated,
-                    truncated=truncated,
-                    buf_pct=buf_pct,
-                    cleared=bool(getattr(stats, "cleared", False)),
-                    outcome=getattr(stats, "outcome", None),
-                    global_step=global_timestep,
-                )
                 self.logger.store(
                     {
                         "train/return": episode_return,
@@ -1057,7 +999,7 @@ class SAC(BenchmarkAgent):
                 episode_len = 0
 
                 if self.render_every > 0 and episodes % self.render_every == 0:
-                    progress.log(
+                    self.logger.log(
                         f"[render] episode {episodes} — opening live window...",
                         color="cyan",
                     )
@@ -1070,8 +1012,6 @@ class SAC(BenchmarkAgent):
                     obs, info = self.env.reset()
                 except StopIteration:
                     break
-
-                progress.on_reset(info)
 
                 one_hot_vec = info["task_one_hot"]
                 new_scene_id = info.get("scene_id", "")
@@ -1092,7 +1032,7 @@ class SAC(BenchmarkAgent):
                         if buf_size >= self.cl_hook_min_transitions:
                             self.on_task_end(current_task_idx)
                         else:
-                            progress.log(
+                            self.logger.log(
                                 f"[CL] Skipping on_task_end — only {buf_size} "
                                 f"transitions (need {self.cl_hook_min_transitions}).",
                                 color="yellow",
@@ -1109,11 +1049,6 @@ class SAC(BenchmarkAgent):
                     current_scene_id = new_scene_id
                     if not self.agent_policy_exploration:
                         task_timestep = 0
-                    progress.on_task_switch(
-                        new_scene_id=current_scene_id,
-                        task_idx=current_task_idx,
-                        total_tasks=len(self.scene_ids),
-                    )
 
                 current_session = new_session
 
@@ -1135,7 +1070,7 @@ class SAC(BenchmarkAgent):
                             batch["idxs"].numpy(), results["abs_error"].numpy()
                         )
                     self._log_after_update(results)
-                progress.log(
+                self.logger.log(
                     f"Updated in {time.time() - t_update:.2f}s (step {global_timestep})"
                 )
 
@@ -1153,7 +1088,7 @@ class SAC(BenchmarkAgent):
         # ---- training complete ----
         self.on_task_end(current_task_idx)
         self.save_model(current_task_idx)
-        progress.log(
+        self.logger.log(
             f"Training complete — {global_timestep} steps, {episodes} episodes.",
             color="green",
         )

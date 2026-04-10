@@ -90,8 +90,15 @@ def main() -> None:
             finally:
                 env.reacquire_emulator()
 
-    agent.run()
-    env.close()
+    # The progress context manager owns the terminal display lifecycle.
+    # ``env.close()`` is kept inside the ``with`` block so the final
+    # episode's ``on_episode_end`` event can render before the display
+    # (``LiveProgress.stop()``) tears down.
+    with logger.progress:
+        try:
+            agent.run()
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":

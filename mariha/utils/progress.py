@@ -3,8 +3,9 @@
 Curriculum training runs iterate over thousands of human clips, and the
 default per-episode log line is too sparse to tell at a glance which clip
 is playing, how far into the sequence we are, or how long the run will
-take.  This module provides a small progress-display layer that the
-training loop calls at episode boundaries.
+take.  This module provides a small progress-display layer that is driven
+entirely by the environment and the logger — **agent code is
+progress-agnostic**.
 
 Three implementations are provided:
 
@@ -19,15 +20,24 @@ The factory ``build_progress(mode, fallback_log)`` chooses the right
 implementation, falling back to ``LineProgress`` if ``rich`` is missing
 or stdout is not a TTY.
 
-Agents access the progress object via the logger: the context builders
-attach it as ``logger.progress``, and the run loop picks it up with::
+Wiring (who calls what, so new agents don't have to think about any of it):
 
-    progress = getattr(self.logger, "progress", None) or NullProgress()
-    with progress:
-        ...
-        progress.on_reset(info)
-        ...
-        progress.on_episode_end(episode_return=..., ...)
+- ``build_benchmark_context`` / ``build_single_scene_context`` build the
+  progress object, call ``init_meta`` to seed agent/subject/totals, and
+  attach it to both the logger (``logger.progress``) and the env
+  (``ContinualLearningEnv(progress=...)``).
+- The **env** calls ``on_reset`` at the start of each episode and
+  ``on_episode_end`` once the previous episode's final step has been
+  consumed.  The env tracks ``episode_return`` / ``episode_len`` /
+  ``global_step`` itself.
+- The **logger** forwards every scalar passed to ``store({...})`` into
+  ``progress.update_metrics`` so agent-specific counters like
+  ``buffer_fill_pct`` land in the display without agent code touching
+  the progress tracker.
+- The scripts wrap ``agent.run()`` in ``with logger.progress:`` so
+  ``LiveProgress`` opens/closes its ``rich.Live`` context cleanly.
+
+Agents don't import this module.
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Deque, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 from mariha.utils.logging import colorize
 
@@ -87,8 +97,12 @@ class ProgressSnapshot:
     task_idx: int = 0
     total_tasks: int = 0
 
-    buf_pct: float = 0.0
     episodes_completed: int = 0
+
+    # Arbitrary scalar metrics forwarded from ``logger.store(...)`` calls.
+    # Renderers can pick out well-known keys (e.g. ``buffer_fill_pct``) and
+    # ignore the rest.
+    extra_metrics: Dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +135,7 @@ class TrainingProgress(ABC):
         self._success_buf: Deque[bool] = deque(maxlen=self._SUCCESS_WINDOW)
         self._return_buf: Deque[float] = deque(maxlen=self._RETURN_WINDOW)
         self._episodes_completed: int = 0
+        self._scene_ids: List[str] = []
 
     # ------------------------------------------------------------------
     # Meta init (called before `start` so the factory can pre-populate
@@ -135,13 +150,22 @@ class TrainingProgress(ABC):
         seed: int,
         clip_total: Optional[int] = None,
         total_steps: Optional[int] = None,
+        scene_ids: Optional[List[str]] = None,
     ) -> None:
-        """Populate agent/subject/budget fields before the loop starts."""
+        """Populate agent/subject/budget fields before the loop starts.
+
+        ``scene_ids``, when supplied, lets ``on_reset`` resolve task indices
+        automatically so the env (and any agent) never has to call
+        ``on_task_switch`` explicitly.
+        """
         self._snap.agent_name = agent_name
         self._snap.subject = subject
         self._snap.seed = seed
         self._snap.clip_total = clip_total
         self._snap.total_steps = total_steps
+        if scene_ids is not None:
+            self._scene_ids = list(scene_ids)
+            self._snap.total_tasks = len(self._scene_ids)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -173,8 +197,9 @@ class TrainingProgress(ABC):
     # ------------------------------------------------------------------
 
     def on_reset(self, info: dict) -> None:
-        """Called after ``env.reset()`` returns the next episode's info dict."""
+        """Called by the env at the start of each new episode."""
         s = self._snap
+        prev_scene = s.scene_id
         s.clip_code = str(info.get("clip_code", ""))
         s.clip_index = int(info.get("clip_index", 0))
         if info.get("clip_total") is not None and s.clip_total is None:
@@ -185,6 +210,16 @@ class TrainingProgress(ABC):
         s.phase = str(info.get("phase", ""))
         s.human_outcome = str(info.get("human_outcome", ""))
         s.max_steps = int(info.get("max_steps", 0))
+        if self._scene_ids and s.scene_id in self._scene_ids:
+            s.task_idx = self._scene_ids.index(s.scene_id)
+            s.total_tasks = len(self._scene_ids)
+        # Scene boundary → emit a task-switch log line (once we have a
+        # previous scene to compare against; the very first reset is silent).
+        if prev_scene and prev_scene != s.scene_id:
+            self.log(
+                f"[task switch] → {s.scene_id} ({s.task_idx}/{s.total_tasks})",
+                color="magenta",
+            )
         self._on_reset()
 
     def on_episode_end(
@@ -194,12 +229,11 @@ class TrainingProgress(ABC):
         episode_len: int,
         terminated: bool,
         truncated: bool,
-        buf_pct: float,
         cleared: bool,
         outcome: Optional[str],
         global_step: int,
     ) -> None:
-        """Called once the current episode's final transition has been stored."""
+        """Called by the env once the episode's final transition has been seen."""
         now = time.monotonic()
         if self._last_episode_time is not None:
             dt = max(1e-6, now - self._last_episode_time)
@@ -224,7 +258,6 @@ class TrainingProgress(ABC):
         s.cleared = bool(cleared)
         s.outcome = str(outcome or "")
         s.global_step = int(global_step)
-        s.buf_pct = float(buf_pct)
         s.episodes_completed = self._episodes_completed
         s.return_mean = (
             sum(self._return_buf) / len(self._return_buf) if self._return_buf else 0.0
@@ -236,18 +269,19 @@ class TrainingProgress(ABC):
 
         self._on_episode_end()
 
-    def on_task_switch(
-        self,
-        *,
-        new_scene_id: str,
-        task_idx: int,
-        total_tasks: int,
-    ) -> None:
-        """Called when the curriculum crosses a task boundary."""
-        self._snap.scene_id = str(new_scene_id)
-        self._snap.task_idx = int(task_idx)
-        self._snap.total_tasks = int(total_tasks)
-        self._on_task_switch()
+    def update_metrics(self, **metrics: float) -> None:
+        """Merge arbitrary scalar metrics into the snapshot.
+
+        Called by ``EpochLogger.store`` so every agent can surface custom
+        scalars (e.g. ``buffer_fill_pct``, ``epsilon``, ``entropy``) to the
+        display without importing anything from this module.  Non-numeric
+        values are silently skipped.
+        """
+        for key, value in metrics.items():
+            try:
+                self._snap.extra_metrics[key] = float(value)
+            except (TypeError, ValueError):
+                continue
 
     # ------------------------------------------------------------------
     # Generic log routing
@@ -293,9 +327,6 @@ class TrainingProgress(ABC):
         pass
 
     def _on_episode_end(self) -> None:
-        pass
-
-    def _on_task_switch(self) -> None:
         pass
 
 
@@ -352,9 +383,10 @@ class NullProgress(TrainingProgress):
 
     def _on_episode_end(self) -> None:
         s = self._snap
+        buf_pct = s.extra_metrics.get("buffer_fill_pct", 0.0)
         msg = (
             f"Ep {s.episodes_completed:5d} | return={s.episode_return:7.2f} | "
-            f"len={s.episode_len:4d} | buf={s.buf_pct:.1f}%"
+            f"len={s.episode_len:4d} | buf={buf_pct:.1f}%"
         )
         self.log(msg, color="green")
 
@@ -407,21 +439,15 @@ class LineProgress(TrainingProgress):
             scene_ctx.append(f"human={s.human_outcome}")
         scene_str = f"{scene} ({' '.join(scene_ctx)})" if scene_ctx else scene
 
+        buf_pct = s.extra_metrics.get("buffer_fill_pct", 0.0)
         msg = (
             f"[{s.subject} | {s.agent_name}] clip {pos} {scene_str} code={clip} | "
             f"ret={s.episode_return:.2f} μ={s.return_mean:.2f} len={s.episode_len} "
-            f"cleared={s.cleared} | buf={s.buf_pct:.0f}% | "
+            f"cleared={s.cleared} | buf={buf_pct:.0f}% | "
             f"{_fmt_rate_per_min(s.rate_ewma)} ETA {_fmt_eta(s.eta_seconds)} | "
             f"succ {_fmt_success(s.success_cleared, s.success_total)}"
         )
         self.log(msg, color="green")
-
-    def _on_task_switch(self) -> None:
-        s = self._snap
-        self.log(
-            f"[task switch] → {s.scene_id} ({s.task_idx}/{s.total_tasks})",
-            color="magenta",
-        )
 
     def log(self, msg: str, color: Optional[str] = None) -> None:
         if self._fallback_log is not None:
@@ -478,14 +504,6 @@ class LiveProgress(TrainingProgress):
         self._refresh()
 
     def _on_episode_end(self) -> None:
-        self._refresh()
-
-    def _on_task_switch(self) -> None:
-        self.log(
-            f"[task switch] → {self._snap.scene_id} "
-            f"({self._snap.task_idx}/{self._snap.total_tasks})",
-            color="magenta",
-        )
         self._refresh()
 
     def log(self, msg: str, color: Optional[str] = None) -> None:
@@ -566,10 +584,26 @@ class LiveProgress(TrainingProgress):
             f"{_fmt_success(s.success_cleared, s.success_total)}   "
             f"(window={self._SUCCESS_WINDOW})",
         )
-        tbl.add_row(
-            "Buffer",
-            f"{s.buf_pct:.1f}%   global_steps={s.global_step:,}",
-        )
+        buf_pct = s.extra_metrics.get("buffer_fill_pct")
+        if buf_pct is not None:
+            tbl.add_row(
+                "Buffer",
+                f"{buf_pct:.1f}%   global_steps={s.global_step:,}",
+            )
+        else:
+            tbl.add_row("Steps", f"global={s.global_step:,}")
+
+        # Surface any other scalar metrics that the agent forwarded via
+        # ``logger.store``.  We already render ``buffer_fill_pct`` above, so
+        # skip it here.  Common keys include ``epsilon`` (DQN) and
+        # ``alpha``/``entropy`` (SAC); unknown keys are shown verbatim.
+        extras = {
+            k: v for k, v in s.extra_metrics.items() if k != "buffer_fill_pct"
+        }
+        if extras:
+            bits = "   ".join(f"{k}={v:.3g}" for k, v in sorted(extras.items()))
+            tbl.add_row("Metrics", bits)
+
         if s.total_tasks:
             tbl.add_row("Task", f"{s.task_idx}/{s.total_tasks}")
 

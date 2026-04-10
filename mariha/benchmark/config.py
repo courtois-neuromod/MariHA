@@ -231,15 +231,8 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     scene_meta = load_metadata(SCENARIOS_DIR)
     scene_ids = sorted(scene_meta.keys())
 
-    # Environment
-    env = ContinualLearningEnv(
-        sequence=sequence,
-        scene_ids=scene_ids,
-        render_mode=args.render_mode,
-        render_speed=args.render_speed,
-    )
-
-    # Logger
+    # Logger — built before the env so the progress tracker can borrow
+    # ``logger.log`` as its fallback output.
     agent_name = getattr(args, "agent", None) or "sac"
     timestamp = get_readable_timestamp()
     experiment_dir = Path(args.experiment_dir)
@@ -253,8 +246,10 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         group_id=f"{args.subject}_{agent_name}",
     )
 
-    # Progress display — attached to the logger so agents can pick it up
-    # via `getattr(self.logger, "progress", None)`.
+    # Progress display — constructed before the env so the env can fire
+    # ``on_reset`` / ``on_episode_end`` directly.  Also attached to the
+    # logger so ``logger.store({...})`` forwards scalar metrics to
+    # ``progress.extra_metrics`` without any agent-side plumbing.
     progress = build_progress(getattr(args, "progress", "live"), fallback_log=logger.log)
     progress.init_meta(
         agent_name=agent_name,
@@ -262,8 +257,19 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         seed=args.seed,
         clip_total=len(sequence),
         total_steps=None,
+        scene_ids=scene_ids,
     )
     logger.progress = progress
+
+    # Environment — takes the progress tracker directly so no agent code
+    # needs to know about the display layer.
+    env = ContinualLearningEnv(
+        sequence=sequence,
+        scene_ids=scene_ids,
+        render_mode=args.render_mode,
+        render_speed=args.render_speed,
+        progress=progress,
+    )
 
     return env, scene_ids, logger, sequence
 
@@ -365,14 +371,6 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
     # Cycle the specs forever; StepBudgetCLEnv stops at args.total_steps.
     spec_cycle = itertools.cycle(scene_specs)
 
-    env = StepBudgetCLEnv(
-        sequence=spec_cycle,
-        scene_ids=scene_ids,
-        max_steps=args.total_steps,
-        render_mode=args.render_mode,
-        render_speed=args.render_speed,
-    )
-
     # Logger path: experiments/single/{scene_id}/{agent}/{timestamp}_seed{seed}
     agent_name = getattr(args, "agent", None) or "sac"
     timestamp = get_readable_timestamp()
@@ -396,7 +394,17 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
         seed=args.seed,
         clip_total=len(scene_specs),
         total_steps=args.total_steps,
+        scene_ids=scene_ids,
     )
     logger.progress = progress
+
+    env = StepBudgetCLEnv(
+        sequence=spec_cycle,
+        scene_ids=scene_ids,
+        max_steps=args.total_steps,
+        render_mode=args.render_mode,
+        render_speed=args.render_speed,
+        progress=progress,
+    )
 
     return env, scene_ids, logger, scene_specs

@@ -151,6 +151,15 @@ class ContinualLearningEnv:
     retro scenario file is scene-specific).  Within a scene, the same env
     instance is reused across episodes.
 
+    Progress tracking is optional: if a ``TrainingProgress`` instance is
+    passed via ``progress``, the env emits ``on_reset`` / ``on_episode_end``
+    events automatically so individual agents don't need to know about
+    the display layer at all.  ``on_episode_end`` is fired lazily from the
+    *next* ``reset()`` call (or from ``close()`` for the final episode),
+    which lets the agent's ``logger.store({...})`` run in between and
+    surface agent-specific scalars (``buffer_fill_pct``, ``epsilon``, ...)
+    to the display via ``EpochLogger.store``.
+
     Args:
         sequence: A ``BaseSequence`` (or any iterable of ``EpisodeSpec``).
         scene_ids: Ordered list of all valid scene IDs.
@@ -158,6 +167,9 @@ class ContinualLearningEnv:
         render_speed: Speed multiplier for rendering (1 = 60 fps).
         stimuli_path: Override for the stimuli directory.
         scenarios_dir: Override for the scenario files directory.
+        progress: Optional ``TrainingProgress`` tracker.  The env owns
+            episode-return / episode-length bookkeeping and emits events
+            directly, so agents don't interact with progress at all.
     """
 
     def __init__(
@@ -168,6 +180,7 @@ class ContinualLearningEnv:
         render_speed: float = 1.0,
         stimuli_path: Path = STIMULI_PATH,
         scenarios_dir: Path = SCENARIOS_DIR,
+        progress: Any = None,
     ) -> None:
         self._sequence_iter: Iterator = iter(sequence)
         self._clip_total: int | None = (
@@ -178,6 +191,7 @@ class ContinualLearningEnv:
         self._render_speed = render_speed
         self._stimuli_path = stimuli_path
         self._scenarios_dir = scenarios_dir
+        self._progress = progress
 
         # Loaded metadata for exit points.
         self._scene_metadata = load_metadata(scenarios_dir)
@@ -190,6 +204,13 @@ class ContinualLearningEnv:
         self._episode_count: int = 0
         self._done: bool = False
         self._current_session: str | None = None
+
+        # Episode bookkeeping owned by the env (used to emit progress events
+        # without involving agent code).
+        self._episode_return: float = 0.0
+        self._episode_len: int = 0
+        self._global_step: int = 0
+        self._pending_end: dict | None = None
 
         # Prefetch the first spec so we can set up observation/action spaces.
         self._prefetch_next()
@@ -229,6 +250,12 @@ class ContinualLearningEnv:
         Raises:
             StopIteration: When the sequence is exhausted.
         """
+        # Flush any pending episode-end event first so that the agent's
+        # ``logger.store({...})`` (called between step() and reset()) has a
+        # chance to push scalars into ``progress.extra_metrics`` before the
+        # display renders the completed episode.
+        self._flush_pending_end()
+
         if self._done or self._next_spec is None:
             raise StopIteration("Curriculum sequence is exhausted.")
 
@@ -272,6 +299,15 @@ class ContinualLearningEnv:
         self._episode_count += 1
         self._prefetch_next()
 
+        # Fresh per-episode counters (the env owns these so agents don't
+        # have to track them for progress purposes).
+        self._episode_return = 0.0
+        self._episode_len = 0
+
+        # Notify the progress tracker about the new episode.
+        if self._progress is not None:
+            self._progress.on_reset(info)
+
         return obs, info
 
     def step(
@@ -289,6 +325,24 @@ class ContinualLearningEnv:
             raise RuntimeError("Call reset() before step().")
         obs, reward, terminated, truncated, info = self._env.step(action)
         info["episode_index"] = self._episode_count - 1
+
+        # Episode bookkeeping for progress events.
+        self._episode_return += float(reward)
+        self._episode_len += 1
+        self._global_step += 1
+
+        if terminated or truncated:
+            stats = self.episode_stats
+            self._pending_end = {
+                "episode_return": self._episode_return,
+                "episode_len": self._episode_len,
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "cleared": bool(getattr(stats, "cleared", False)),
+                "outcome": getattr(stats, "outcome", None),
+                "global_step": self._global_step,
+            }
+
         return obs, reward, terminated, truncated, info
 
     def render(self) -> np.ndarray | None:
@@ -299,8 +353,19 @@ class ContinualLearningEnv:
 
     def close(self) -> None:
         """Close the active environment."""
+        # Flush the final episode's progress event so the display sees the
+        # last clip before the emulator shuts down.
+        self._flush_pending_end()
         if self._env is not None:
             self._env.close()
+
+    def _flush_pending_end(self) -> None:
+        """Fire a deferred ``on_episode_end`` event, if one is pending."""
+        if self._pending_end is None:
+            return
+        if self._progress is not None:
+            self._progress.on_episode_end(**self._pending_end)
+        self._pending_end = None
 
     def release_emulator(self) -> None:
         """Temporarily close the inner scene env.
@@ -442,6 +507,7 @@ class StepBudgetCLEnv(ContinualLearningEnv):
         render_speed: float = 1.0,
         stimuli_path: Path = STIMULI_PATH,
         scenarios_dir: Path = SCENARIOS_DIR,
+        progress: Any = None,
     ) -> None:
         super().__init__(
             sequence=sequence,
@@ -450,6 +516,7 @@ class StepBudgetCLEnv(ContinualLearningEnv):
             render_speed=render_speed,
             stimuli_path=stimuli_path,
             scenarios_dir=scenarios_dir,
+            progress=progress,
         )
         self._max_steps = int(max_steps)
         self._step_count = 0

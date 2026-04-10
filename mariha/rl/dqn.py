@@ -303,10 +303,6 @@ class DQN(BenchmarkAgent):
             if done:
                 episodes += 1
                 buf_pct = self.replay_buffer.size / max(self.replay_buffer.max_size, 1) * 100
-                self.logger.log(
-                    f"Ep {episodes:5d} | return={episode_return:7.2f} | "
-                    f"len={episode_len:4d} | eps={epsilon:.3f} | buf={buf_pct:.1f}%"
-                )
                 self.logger.store(
                     {
                         "train/return": episode_return,

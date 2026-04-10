@@ -89,8 +89,12 @@ class RandomAgent(BenchmarkAgent):
 
             if terminated or truncated:
                 episodes += 1
-                self.logger.log(
-                    f"Ep {episodes:5d} | return={episode_return:7.2f} | len={episode_len:4d}"
+                self.logger.store(
+                    {
+                        "train/return": episode_return,
+                        "train/ep_length": episode_len,
+                        "train/episodes": episodes,
+                    }
                 )
                 episode_return = 0.0
                 episode_len = 0

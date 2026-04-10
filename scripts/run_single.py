@@ -78,8 +78,16 @@ def main() -> None:
     # Phase 5: instantiate agent and run
     # ------------------------------------------------------------------
     agent = agent_cls.from_args(args, env=env, logger=logger, scene_ids=scene_ids)
-    agent.run()
-    env.close()
+
+    # The progress context manager owns the terminal display lifecycle.
+    # ``env.close()`` is kept inside the ``with`` block so the final
+    # episode's ``on_episode_end`` event can render before the display
+    # tears down.
+    with logger.progress:
+        try:
+            agent.run()
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":

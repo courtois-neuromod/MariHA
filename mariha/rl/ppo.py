@@ -267,10 +267,6 @@ class PPO(BenchmarkAgent):
 
                 if done:
                     episodes += 1
-                    self.logger.log(
-                        f"Ep {episodes:5d} | return={episode_return:7.2f} | "
-                        f"len={episode_len:4d}"
-                    )
                     self.logger.store(
                         {
                             "train/return": episode_return,
