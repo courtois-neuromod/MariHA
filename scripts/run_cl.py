@@ -1,19 +1,21 @@
-"""Continual learning training script (backwards-compatibility shim).
+"""Continual learning training script.
 
-Delegates to ``run_benchmark.py`` after mapping ``--cl_method`` to
-``--algorithm``.  Prefer using ``mariha-run`` directly for new workflows.
+Runs any registered algorithm on the full human-aligned curriculum for a
+given subject.
 
-Usage (unchanged from before)::
+Usage::
 
-    python scripts/run_cl.py --subject sub-01 --cl_method ewc --seed 0
+    mariha-run-cl --algorithm sac --subject sub-01 --seed 0
+    mariha-run-cl --algorithm ewc --subject sub-01 --seed 0
+    mariha-run-cl --algorithm ppo --subject sub-01 --seed 0
 
-Or via the entry point::
-
-    mariha-run-cl --subject sub-01 --cl_method ewc
+Run ``mariha-run-cl --algorithm <name> --help`` to see algorithm-specific
+flags.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -21,22 +23,69 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def main() -> None:
-    # Map legacy --cl_method <name> → --algorithm <name> so run_benchmark
-    # can handle it uniformly.  Any value of --cl_method that is not None
-    # becomes --algorithm; None falls back to "sac".
-    argv = sys.argv[1:]
-    if "--cl_method" in argv:
-        idx = argv.index("--cl_method")
-        method_value = argv[idx + 1] if idx + 1 < len(argv) else None
-        if method_value and not method_value.startswith("--"):
-            argv[idx] = "--algorithm"
-        else:
-            # --cl_method with no value or bare flag: remove it (defaults to sac)
-            argv.pop(idx)
-    sys.argv = [sys.argv[0]] + argv
+    # ------------------------------------------------------------------
+    # Phase 1: parse benchmark-only flags so we know which algorithm to use
+    # ------------------------------------------------------------------
+    from mariha.benchmark.config import build_benchmark_parser
 
-    from scripts.run_benchmark import main as run_main
-    run_main()
+    bench_parser = build_benchmark_parser()
+    bench_args, _ = bench_parser.parse_known_args()
+
+    # ------------------------------------------------------------------
+    # Phase 2: trigger registry population, look up algorithm class
+    # ------------------------------------------------------------------
+    import mariha.rl  # noqa: F401 — registers all built-in algorithms
+    from mariha.benchmark.registry import get_agent_class, list_agents
+
+    try:
+        agent_cls = get_agent_class(bench_args.algorithm)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        print(f"Registered algorithms: {list_agents()}")
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # Phase 3: build the full parser with algorithm-specific flags
+    # ------------------------------------------------------------------
+    full_parser = argparse.ArgumentParser(
+        description=f"MariHA CL benchmark — {bench_args.algorithm}",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        parents=[bench_parser],
+        add_help=True,
+    )
+    agent_cls.add_args(full_parser)
+    args = full_parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # Phase 4: build curriculum, environment, and logger
+    # ------------------------------------------------------------------
+    from mariha.benchmark.config import build_benchmark_context
+
+    env, scene_ids, logger, sequence = build_benchmark_context(args)
+
+    # ------------------------------------------------------------------
+    # Phase 5: instantiate agent and run
+    # ------------------------------------------------------------------
+    agent = agent_cls.from_args(args, env=env, logger=logger, scene_ids=scene_ids)
+
+    # Burn-in phase (pre-curriculum warm-up on a single scene).
+    burn_in_steps = getattr(args, "burn_in_steps", 0)
+    if burn_in_steps > 0:
+        burn_in_scene = getattr(args, "burn_in_scene", "w1l1s0")
+        burn_in_spec = next(
+            (s for s in sequence if s.scene_id == burn_in_scene), None
+        )
+        if burn_in_spec is None:
+            logger.log(
+                f"WARNING: burn-in scene '{burn_in_scene}' not found in "
+                "curriculum. Skipping burn-in.",
+                color="yellow",
+            )
+        else:
+            agent.burn_in(burn_in_spec, burn_in_steps)
+
+    agent.run()
+    env.close()
 
 
 if __name__ == "__main__":

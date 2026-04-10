@@ -1,21 +1,23 @@
-"""Neural network architectures for SAC (actor and critic).
+"""Neural network architectures for MariHA RL algorithms.
 
-The architecture follows COOM's design: a shared convolutional feature
-extractor (Atari-style CNN) concatenated with the one-hot task ID, followed
-by two dense layers.
+Architectures
+-------------
+**SAC** (from COOM):
+    Atari-style CNN (32×8×4 → 64×4×2 → 64×3×1 → Flatten) + task one-hot +
+    two dense layers.
 
-Classes:
-    ``MlpActor``  — Stochastic discrete-action policy (returns action logits).
-    ``MlpCritic`` — Q-value network (returns Q(s,a) for all discrete actions).
+    - ``MlpActor``  — Stochastic discrete-action policy (returns logits).
+    - ``MlpCritic`` — Q-value network (returns Q(s,a) for all actions).
 
-Both accept the pixel observation ``(H, W, C)`` and the task one-hot vector
-as separate inputs, matching the COOM calling convention::
+**PPO** (from ppo_study reference):
+    4× Conv2D(32, 3×3, stride=2, padding='same') → Dense(512) with orthogonal
+    initialisation.  Shared backbone, separate actor (logits) and critic (value)
+    heads.
 
-    logits = actor(obs_batch, one_hot_batch)
-    q_values = critic(obs_batch, one_hot_batch)
+    - ``PPOActorCritic`` — Combined actor-critic for PPO.
 
-Ported from COOM; VizDoom / LSTM / mrunner references removed.  The LSTM
-option is preserved as a flag but not actively used in the MariHA benchmark.
+**DQN**:
+    Reuses ``MlpCritic`` from SAC (same architecture works for DQN Q-values).
 """
 
 from __future__ import annotations
@@ -300,3 +302,97 @@ class MlpCritic(_keras.Model):
         if self.num_heads > 1:
             return self.core.trainable_variables
         return self.core.trainable_variables + self.head.trainable_variables
+
+
+# ---------------------------------------------------------------------------
+# PPO actor-critic (from ppo_study reference)
+# ---------------------------------------------------------------------------
+
+
+def _orthogonal_init(shape, dtype=None):
+    """Orthogonal initialiser scaled by ``sqrt(2)`` (ReLU gain)."""
+    return _keras.initializers.Orthogonal(gain=tf.sqrt(2.0))(shape, dtype=dtype)
+
+
+def build_ppo_conv_head(state_shape: Tuple[int, ...]) -> Model:
+    """Build the ppo_study CNN backbone: 4× Conv2D(32, 3×3, stride=2, same).
+
+    Architecture reproduces ``ppo_study/src/models.py::BaseModel``:
+    4 conv layers (32 filters, 3×3 kernel, stride 2, 'same' padding)
+    followed by a Dense(512) projection.  All layers use orthogonal
+    initialisation with ReLU gain.
+
+    Args:
+        state_shape: Observation shape, e.g. ``(84, 84, 4)``.
+
+    Returns:
+        A Keras ``Model`` mapping ``(batch, H, W, C)`` → ``(batch, 512)``.
+    """
+    init = _keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+    inp = Input(shape=state_shape, name="ppo_obs_in")
+    x = inp
+    for _ in range(4):
+        x = Conv2D(32, 3, strides=2, padding="same",
+                    activation="relu", kernel_initializer=init,
+                    bias_initializer="zeros")(x)
+    x = Flatten()(x)
+    x = Dense(512, activation="relu", kernel_initializer=init,
+              bias_initializer="zeros")(x)
+    return Model(inputs=inp, outputs=x, name="ppo_conv_head")
+
+
+class PPOActorCritic(_keras.Model):
+    """Shared-backbone actor-critic for PPO.
+
+    Architecture from ``ppo_study``: 4× Conv2D(32) backbone → Dense(512) →
+    separate actor (logits) and critic (scalar value) heads.
+
+    Optionally concatenates a one-hot task vector to the backbone output
+    before the heads (set ``hide_task_id=False``).
+
+    Args:
+        state_space: Observation space.
+        action_space: Discrete action space.
+        num_tasks: Length of the one-hot task vector.
+        hidden_size: Backbone output dimension (default 512).
+        hide_task_id: If ``True``, don't use the task one-hot.
+    """
+
+    def __init__(
+        self,
+        state_space: "gymnasium.spaces.Box",
+        action_space: "gymnasium.spaces.Discrete",
+        num_tasks: int,
+        hidden_size: int = 512,
+        hide_task_id: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        self.hide_task_id = hide_task_id
+        self.num_tasks = num_tasks
+        self.backbone = build_ppo_conv_head(state_space.shape)
+        init = _keras.initializers.Orthogonal(gain=1.0)
+        head_in = hidden_size if hide_task_id else hidden_size + num_tasks
+        self.actor_head = Dense(action_space.n, kernel_initializer=init,
+                                bias_initializer="zeros", name="actor_logits")
+        self.critic_head = Dense(1, kernel_initializer=init,
+                                 bias_initializer="zeros", name="critic_value")
+        # Build heads eagerly so weights exist before first call.
+        self.actor_head.build((None, head_in))
+        self.critic_head.build((None, head_in))
+
+    def call(self, obs: tf.Tensor, one_hot_task_id: tf.Tensor = None):
+        """Forward pass.
+
+        Args:
+            obs: Observation batch ``(batch, H, W, C)``.
+            one_hot_task_id: Task one-hot ``(batch, num_tasks)``.
+
+        Returns:
+            Tuple ``(logits, value)`` where logits has shape
+            ``(batch, n_actions)`` and value has shape ``(batch, 1)``.
+        """
+        features = self.backbone(obs)
+        if not self.hide_task_id and one_hot_task_id is not None:
+            features = tf.concat([features, one_hot_task_id], axis=-1)
+        return self.actor_head(features), self.critic_head(features)

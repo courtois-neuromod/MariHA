@@ -17,9 +17,11 @@ If ``--scene_id`` is not provided, the first scene in the subject's
 curriculum is used.
 
 Pass ``--render_every N`` to open a live window and watch one full greedy
-episode every N training episodes (a progress checkpoint)::
+episode every N training episodes (a progress checkpoint).  Combine it
+with ``--render_speed S`` to control playback speed (``1.0`` = native
+60 fps, ``<1`` slows down, ``>1`` speeds up best-effort)::
 
-    mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
+    mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50 --render_speed 0.5
 """
 
 from __future__ import annotations
@@ -218,7 +220,7 @@ def main() -> None:
             if args.render_every > 0 and episodes % args.render_every == 0:
                 pbar.write(f"[render] episode {episodes} — opening live window...")
                 env.close()
-                play_render_episode(actor_fn=_actor_fn, spec=next(spec_cycle), **env_kwargs)
+                play_render_episode(actor_fn=_actor_fn, spec=next(spec_cycle), render_speed=args.render_speed, **env_kwargs)
                 env = make_scene_env(**env_kwargs, render_mode=args.render_mode)
 
             obs, info = env.reset(episode_spec=next(spec_cycle))

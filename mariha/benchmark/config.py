@@ -31,7 +31,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="MariHA benchmark runner",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        add_help=False,  # help is added by the full parser in run_benchmark.py
+        add_help=False,  # help is added by the full parser in run_cl.py
     )
 
     p.add_argument(
@@ -39,7 +39,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         type=str,
         default="sac",
         help="Algorithm name (must be registered in mariha.rl). "
-             "Run `mariha-run --help` after selecting an algorithm to see "
+             "Run `mariha-run-cl --algorithm <name> --help` to see "
              "its specific flags.",
     )
     p.add_argument(
@@ -67,6 +67,13 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         help="Render mode for MarioEnv (None or 'human').",
     )
     p.add_argument(
+        "--render_speed",
+        type=float,
+        default=1.0,
+        help="Render speed multiplier. 1 = 60 fps, 0.5 = 30 fps, "
+             "10 = 600 fps (best effort).",
+    )
+    p.add_argument(
         "--require_existing_states",
         type=str2bool,
         default=True,
@@ -78,6 +85,73 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=["tsv", "tensorboard"],
         help="Logging backends: tsv, tensorboard, wandb.",
+    )
+
+    # Burn-in
+    p.add_argument(
+        "--burn_in_steps",
+        type=int,
+        default=5000,
+        help="Environment steps on burn-in scene before curriculum starts. "
+             "Set to 0 to disable burn-in.",
+    )
+    p.add_argument(
+        "--burn_in_scene",
+        type=str,
+        default="w1l1s0",
+        help="Scene ID for the burn-in phase.",
+    )
+    p.add_argument(
+        "--post_burn_in_update_after",
+        type=int,
+        default=0,
+        help="Value of update_after after burn-in completes. "
+             "0 means updates start immediately once the curriculum begins.",
+    )
+
+    # Per-scene buffer mode
+    p.add_argument(
+        "--buffer_mode",
+        type=str,
+        default="single",
+        choices=["single", "per_scene"],
+        help="Replay buffer strategy: 'single' (one global buffer) or "
+             "'per_scene' (per-scene buffers with session-boundary flush).",
+    )
+    p.add_argument(
+        "--per_scene_capacity",
+        type=int,
+        default=1000,
+        help="Max transitions per scene buffer (only with --buffer_mode per_scene).",
+    )
+    p.add_argument(
+        "--flush_on",
+        type=str,
+        default="session",
+        choices=["session", "level", "never"],
+        help="When to flush per-scene buffers.",
+    )
+    p.add_argument(
+        "--cl_hook_min_transitions",
+        type=int,
+        default=500,
+        help="Minimum transitions in current scene buffer before firing CL hooks.",
+    )
+
+    # Episode budget overrides
+    p.add_argument(
+        "--fixed_episode_steps",
+        type=int,
+        default=None,
+        help="Override max_steps for ALL episodes to this fixed value. "
+             "Mutually exclusive with --episode_step_multiplier.",
+    )
+    p.add_argument(
+        "--episode_step_multiplier",
+        type=float,
+        default=None,
+        help="Scale each episode's human-derived max_steps by this factor. "
+             "Mutually exclusive with --fixed_episode_steps.",
     )
     return p
 
@@ -94,11 +168,13 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
             ``build_benchmark_parser()``.
 
     Returns:
-        A three-tuple ``(env, scene_ids, logger)`` where:
+        A four-tuple ``(env, scene_ids, logger, sequence)`` where:
 
         - ``env`` is a ``ContinualLearningEnv`` instance.
         - ``scene_ids`` is the canonical ordered list of all scene IDs.
         - ``logger`` is an ``EpochLogger`` configured for this run.
+        - ``sequence`` is the curriculum ``BaseSequence`` (for burn-in spec
+          extraction and other pre-training uses).
 
     Raises:
         SystemExit: If the curriculum for ``args.subject`` is empty.
@@ -118,6 +194,19 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         print(f"ERROR: No episodes found for {args.subject}. Aborting.")
         sys.exit(1)
 
+    # Episode budget overrides
+    fixed_steps = getattr(args, "fixed_episode_steps", None)
+    multiplier = getattr(args, "episode_step_multiplier", None)
+    if fixed_steps is not None and multiplier is not None:
+        print("ERROR: --fixed_episode_steps and --episode_step_multiplier "
+              "are mutually exclusive.")
+        sys.exit(1)
+    if fixed_steps is not None or multiplier is not None:
+        from mariha.curriculum.sequences import BudgetOverrideSequence
+        sequence = BudgetOverrideSequence(
+            sequence, fixed_steps=fixed_steps, multiplier=multiplier,
+        )
+
     # Canonical scene ID ordering (alphabetical, consistent across runs)
     scene_meta = load_metadata(SCENARIOS_DIR)
     scene_ids = sorted(scene_meta.keys())
@@ -127,6 +216,7 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         sequence=sequence,
         scene_ids=scene_ids,
         render_mode=args.render_mode,
+        render_speed=args.render_speed,
     )
 
     # Logger
@@ -143,4 +233,4 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         group_id=f"{args.subject}_{algorithm_name}",
     )
 
-    return env, scene_ids, logger
+    return env, scene_ids, logger, sequence

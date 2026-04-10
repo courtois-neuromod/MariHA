@@ -1,15 +1,8 @@
 """Argument parsing and hyperparameter defaults for MariHA training scripts.
 
 Provides ``build_parser()`` which returns an ``argparse.ArgumentParser``
-pre-configured with all SAC and CL hyperparameters.  Individual scripts call
-``parser.parse_args()`` and forward the resulting namespace to the SAC
-constructor and logger.
-
-.. deprecated::
-    ``build_parser()`` is kept for backwards compatibility with
-    ``run_single.py`` and any external code.  New scripts should use
-    :func:`mariha.benchmark.config.build_benchmark_parser` for benchmark-level
-    flags and :meth:`mariha.rl.sac.SAC.add_args` for SAC-specific flags.
+pre-configured with all SAC and CL hyperparameters.  Used by
+``run_single.py`` for single-scene SAC training.
 """
 
 from __future__ import annotations
@@ -21,10 +14,7 @@ from mariha.utils.running import float_or_str, get_activation_from_str, sci2int,
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Return the argument parser shared by ``run_single.py`` and ``run_cl.py``.
-
-    Composes the benchmark-level parser with all SAC-specific flags so that
-    existing code calling ``build_parser()`` continues to work unchanged.
+    """Return the argument parser used by ``run_single.py``.
 
     Returns:
         Configured ``argparse.ArgumentParser``.
@@ -80,11 +70,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reset_critic_on_task_change", type=str2bool, default=False)
     p.add_argument("--agent_policy_exploration", type=str2bool, default=False)
 
-    # --- CL method ---
-    p.add_argument("--cl_method", type=str, default=None,
-                   choices=[None, "l2", "ewc", "mas", "si", "owl", "packnet",
-                             "agem", "vcl", "der", "clonex", "multitask"])
-
     # --- Logging ---
     p.add_argument("--log_every", type=sci2int, default=1000,
                    help="Steps between logging epochs.")
@@ -95,5 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Logging backends: tsv, tensorboard, wandb.")
     p.add_argument("--render_mode", type=str, default=None,
                    help="Render mode for MarioEnv (None or 'human').")
+    p.add_argument("--render_speed", type=float, default=1.0,
+                   help="Render speed multiplier. 1 = 60 fps, 0.5 = 30 fps, "
+                        "10 = 600 fps (best effort).")
 
     return p
