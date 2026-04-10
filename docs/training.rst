@@ -137,12 +137,26 @@ The buffer type is set via the ``--buffer_type`` argument:
 Single-scene training (``run_single.py``)
 -----------------------------------------
 
-``mariha-run-single`` trains vanilla SAC on one scene — useful for
-debugging, hyperparameter tuning, or quick proof-of-concept runs.
+``mariha-run-single`` trains any registered agent on a single scene —
+useful for debugging, hyperparameter tuning, or quick proof-of-concept
+runs.  It mirrors ``mariha-run-cl``'s registry/plugin pattern, so any
+agent registered in ``mariha/rl/__init__.py`` is available here
+automatically:
 
 .. code-block:: bash
 
-   mariha-run-single --subject sub-01 --scene_id w1l1s0 --total_steps 200000
+   mariha-run-single --agent sac --subject sub-01 --scene_id w1l1s0 --total_steps 200000
+   mariha-run-single --agent ppo --subject sub-01 --scene_id w1l1s0 --total_steps 200000
+   mariha-run-single --agent dqn --subject sub-01 --scene_id w1l1s0 --total_steps 200000
+
+Under the hood, the agent is fed a ``StepBudgetCLEnv`` that cycles
+forever over the scene's episode specs and flips ``is_done`` to ``True``
+once the env-step budget is reached.  The budget is **soft** — agents
+only check ``is_done`` at episode boundaries, so the actual step count
+can overshoot by up to one episode length.
+
+If ``--scene_id`` is omitted, the first scene in the subject's
+curriculum is used.
 
 **Live render checkpoints**
 
@@ -185,10 +199,10 @@ and watch the agent play one full greedy episode.  Works for both
 .. code-block:: bash
 
    # Single-scene
-   mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
+   mariha-run-single --agent sac --subject sub-01 --scene_id w1l1s0 --render_every 50
 
    # Full CL run
-   mariha-run-cl --algorithm ewc --subject sub-01 --render_every 100
+   mariha-run-cl --agent ewc --subject sub-01 --render_every 100
 
 Training pauses, the window opens, the episode plays to termination, then
 the window closes and training resumes.  The underlying implementation
@@ -202,7 +216,7 @@ to follow), and values above ``1`` speed it up on a best-effort basis:
 
 .. code-block:: bash
 
-   mariha-run-cl --algorithm ewc --subject sub-01 --render_every 100 --render_speed 0.5
+   mariha-run-cl --agent ewc --subject sub-01 --render_every 100 --render_speed 0.5
 
 Checkpointing
 -------------

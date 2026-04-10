@@ -71,7 +71,7 @@ class SAC(BenchmarkAgent):
         logger: An ``EpochLogger`` for recording training statistics.
         scene_ids: Ordered list of all scene IDs in the benchmark.  Defines
             the one-hot dimension and the ``seq_idx`` mapping.
-        algorithm: Algorithm name string (used for checkpoint paths).
+        agent: Agent name string (used for checkpoint paths).
         actor_cl: Actor class to instantiate.
         critic_cl: Critic class to instantiate.
         policy_kwargs: Additional keyword arguments forwarded to both the
@@ -114,7 +114,7 @@ class SAC(BenchmarkAgent):
         env,
         logger: EpochLogger,
         scene_ids: List[str],
-        algorithm: Optional[str] = None,
+        agent: Optional[str] = None,
         actor_cl: Type = models.MlpActor,
         critic_cl: Type = models.MlpCritic,
         policy_kwargs: Optional[Dict] = None,
@@ -159,7 +159,7 @@ class SAC(BenchmarkAgent):
         self.scene_ids = scene_ids
         self.num_tasks = len(scene_ids)
         self.logger = logger
-        self.algorithm = algorithm
+        self.agent = agent
         self.critic_cl = critic_cl
         self.policy_kwargs = policy_kwargs
         self.replay_size = int(replay_size)
@@ -651,9 +651,9 @@ class SAC(BenchmarkAgent):
 
     def save_model(self, current_task_idx: int) -> None:
         """Save actor and critic weights to disk."""
-        method = self.algorithm or "sac"
+        agent_name = self.agent or "sac"
         ts = self.timestamp or ""
-        model_dir = str(self.experiment_dir / "checkpoints" / method / f"{ts}_task{current_task_idx}")
+        model_dir = str(self.experiment_dir / "checkpoints" / agent_name / f"{ts}_task{current_task_idx}")
         self.logger.log(f"Saving model to {model_dir}", color="crimson")
         os.makedirs(model_dir, exist_ok=True)
         self.actor.save_weights(os.path.join(model_dir, "actor"))
@@ -852,8 +852,6 @@ class SAC(BenchmarkAgent):
         # Logging
         parser.add_argument("--log_every", type=sci2int, default=1000)
         parser.add_argument("--save_freq_epochs", type=int, default=25)
-        parser.add_argument("--scene_id", type=str, default=None,
-                            help="(run_single only) Single scene ID to train on.")
         parser.add_argument(
             "--render_every", type=int, default=0,
             help=(
@@ -885,7 +883,7 @@ class SAC(BenchmarkAgent):
             env=env,
             logger=logger,
             scene_ids=scene_ids,
-            algorithm=getattr(args, "algorithm", None),
+            agent=getattr(args, "agent", None),
             policy_kwargs=policy_kwargs,
             seed=getattr(args, "seed", 0),
             log_every=getattr(args, "log_every", 1000),

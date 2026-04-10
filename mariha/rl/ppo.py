@@ -13,7 +13,7 @@ Key design choices:
 
 Usage::
 
-    mariha-run-cl --algorithm ppo --subject sub-01 --seed 0 --lr 1e-4
+    mariha-run-cl --agent ppo --subject sub-01 --seed 0 --lr 1e-4
 """
 
 from __future__ import annotations

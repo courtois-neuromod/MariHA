@@ -1,9 +1,9 @@
-"""BenchmarkAgent: abstract base class for all MariHA algorithm implementations.
+"""BenchmarkAgent: abstract base class for all MariHA agent implementations.
 
-Any algorithm that wants to run on the MariHA benchmark must subclass
+Any agent that wants to run on the MariHA benchmark must subclass
 ``BenchmarkAgent`` and implement its abstract methods.  The benchmark
 infrastructure (curriculum, environment, evaluation, metrics) interacts with
-algorithms exclusively through this interface.
+agents exclusively through this interface.
 
 Minimal contract
 ----------------
@@ -18,13 +18,13 @@ Optional hooks
 
 Config interface
 ----------------
-- ``add_args`` — add algorithm-specific CLI flags to an argparse parser.
+- ``add_args`` — add agent-specific CLI flags to an argparse parser.
 - ``from_args`` — construct an agent from parsed args + benchmark context.
 
 Future extension
 ----------------
 - ``get_named_parameter_groups`` — expose named parameter groups to enable
-  algorithm-agnostic CL regularizers (not required now).
+  agent-agnostic CL regularizers (not required now).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ import numpy as np
 
 
 class BenchmarkAgent(ABC):
-    """Abstract base class every MariHA algorithm must implement."""
+    """Abstract base class every MariHA agent must implement."""
 
     # ------------------------------------------------------------------
     # Action selection
@@ -56,7 +56,7 @@ class BenchmarkAgent(ABC):
         Args:
             obs: Current observation from the environment.
             task_one_hot: One-hot vector identifying the current scene/task.
-                Algorithms that don't use task identity may ignore this.
+                Agents that don't use task identity may ignore this.
             deterministic: If ``True``, return the greedy action (used during
                 evaluation).  If ``False``, sample stochastically (training).
 
@@ -92,7 +92,7 @@ class BenchmarkAgent(ABC):
 
         The benchmark dictates only the *directory* (via the ``task{k}/``
         naming convention); the internal file layout is entirely up to the
-        algorithm.  At minimum, save whatever ``load_checkpoint`` needs to
+        agent.  At minimum, save whatever ``load_checkpoint`` needs to
         reconstruct the policy for evaluation.
 
         Args:
@@ -150,10 +150,10 @@ class BenchmarkAgent(ABC):
 
     @classmethod
     def add_args(cls, parser: argparse.ArgumentParser) -> None:
-        """Add algorithm-specific CLI flags to ``parser``.
+        """Add agent-specific CLI flags to ``parser``.
 
         Called by ``run_benchmark.py`` after the benchmark-level flags have
-        been added, so algorithm flags are parsed in the same ``parse_args``
+        been added, so agent flags are parsed in the same ``parse_args``
         call.  Default implementation is a no-op.
 
         Args:
@@ -171,7 +171,7 @@ class BenchmarkAgent(ABC):
         """Construct an agent from parsed CLI args and benchmark context.
 
         Args:
-            args: Parsed argparse namespace (benchmark + algorithm flags).
+            args: Parsed argparse namespace (benchmark + agent flags).
             env: A ``ContinualLearningEnv`` instance (or compatible env).
             logger: An ``EpochLogger`` instance.
             scene_ids: Canonical ordered list of all scene IDs.
@@ -184,25 +184,25 @@ class BenchmarkAgent(ABC):
         )
 
     # ------------------------------------------------------------------
-    # Future extension: algorithm-agnostic CL regularizers
+    # Future extension: agent-agnostic CL regularizers
     # ------------------------------------------------------------------
 
     def get_named_parameter_groups(self) -> dict[str, list]:
         """Return named groups of trainable parameters.
 
-        Implement this to enable algorithm-agnostic CL regularizers (e.g. an
+        Implement this to enable agent-agnostic CL regularizers (e.g. an
         ``EWCWrapper`` that works across SAC, DDQN, PPO, …).  Not required
         for the benchmark to function; only needed if you want to compose your
-        algorithm with a generic CL method.
+        agent with a generic CL method.
 
         Returns:
             Dict mapping group name (e.g. ``"trunk"``, ``"policy_head"``) to
             a list of trainable parameter tensors/variables.
 
         Raises:
-            NotImplementedError: Default — algorithm-agnostic CL not supported.
+            NotImplementedError: Default — agent-agnostic CL not supported.
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} does not expose named parameter groups. "
-            "Implement get_named_parameter_groups() to enable algorithm-agnostic CL."
+            "Implement get_named_parameter_groups() to enable agent-agnostic CL."
         )

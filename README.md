@@ -54,28 +54,32 @@ cd data/mario.scenes && git annex get sub-*/
 ### Train (full CL curriculum)
 
 ```bash
-mariha-run-cl --algorithm sac --subject sub-01 --seed 0
-mariha-run-cl --algorithm ewc --subject sub-01 --seed 0
-mariha-run-cl --algorithm ppo --subject sub-01 --seed 0
-mariha-run-cl --algorithm dqn --subject sub-01 --seed 0
+mariha-run-cl --agent sac --subject sub-01 --seed 0
+mariha-run-cl --agent ewc --subject sub-01 --seed 0
+mariha-run-cl --agent ppo --subject sub-01 --seed 0
+mariha-run-cl --agent dqn --subject sub-01 --seed 0
 ```
 
 Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time. Pair it with `--render_speed S` to slow down or speed up the playback (1.0 = 60 fps, 0.5 = 30 fps, 10 = up to 600 fps best-effort):
 
 ```bash
-mariha-run-cl --algorithm ewc --subject sub-01 --seed 0 --render_every 100 --render_speed 0.5
+mariha-run-cl --agent ewc --subject sub-01 --seed 0 --render_every 100 --render_speed 0.5
 ```
 
 ### Train (single scene, for debugging)
 
+`mariha-run-single` mirrors `mariha-run-cl`'s registry pattern, so any registered agent works:
+
 ```bash
-mariha-run-single --scene_id w1l1s0 --seed 0
+mariha-run-single --agent sac --scene_id w1l1s0 --seed 0
+mariha-run-single --agent ppo --scene_id w1l1s0 --seed 0
+mariha-run-single --agent dqn --scene_id w1l1s0 --seed 0
 ```
 
 Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time. Use `--render_speed S` to adjust playback speed (default `1.0` = 60 fps):
 
 ```bash
-mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10 --render_speed 0.5
+mariha-run-single --agent sac --scene_id w1l1s0 --seed 0 --render_every 10 --render_speed 0.5
 ```
 
 ### Evaluate
@@ -83,7 +87,7 @@ mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10 --render_speed 0.
 ```bash
 mariha-evaluate \
   --subject sub-01 \
-  --algorithm ewc \
+  --agent ewc \
   --run_prefix <timestamp_seed0> \
   --n_episodes 5 \
   --eval_diagonal          # adds BWT / forgetting metrics
@@ -93,10 +97,10 @@ Outputs `experiments/sub-01/ewc/<run_prefix>/eval_results.json`.
 
 ---
 
-## Algorithms
+## Agents
 
-| `--algorithm` | Class | Description |
-|---------------|-------|-------------|
+| `--agent` | Class | Description |
+|-----------|-------|-------------|
 | `sac` | `SAC` | Vanilla SAC — fine-tune sequentially |
 | `ppo` | `PPO` | Proximal Policy Optimization (on-policy) |
 | `dqn` | `DQN` | Deep Q-Network (epsilon-greedy) |

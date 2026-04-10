@@ -98,10 +98,10 @@ def play_render_episode(
 ) -> None:
     """Create a human-render env, play one greedy episode with the given policy, close it.
 
-    This is the shared implementation used by both ``run_single.py`` and
-    ``ContinualLearningEnv.render_checkpoint()``.  Callers are responsible for
-    closing any existing emulator instance before calling this function
-    (stable-retro allows only one emulator per process).
+    This is the shared implementation used by ``ContinualLearningEnv.render_checkpoint()``
+    (which both ``run_single.py`` and ``run_cl.py`` route through).  Callers are
+    responsible for closing any existing emulator instance before calling this
+    function (stable-retro allows only one emulator per process).
 
     Args:
         actor_fn: Callable ``(obs, one_hot) -> int`` — the current policy.
@@ -363,3 +363,60 @@ class ContinualLearningEnv:
             stimuli_path=self._stimuli_path,
             scenarios_dir=self._scenarios_dir,
         )
+
+
+class StepBudgetCLEnv(ContinualLearningEnv):
+    """Continual learning env that stops after a fixed environment-step budget.
+
+    Used by ``mariha-run-single`` to feed any registered agent a single-scene
+    curriculum that terminates after ``max_steps`` env steps. The wrapped
+    sequence is typically ``itertools.cycle(scene_specs)`` so that the agent
+    can keep resetting until the budget is exhausted.
+
+    **Soft-budget semantics**: agents only check ``env.is_done`` at episode
+    boundaries (see ``SAC.run``, ``PPO.run``, ``DQN.run``), so the actual
+    step count can overshoot ``max_steps`` by up to one episode length.
+    This matches the previous ``run_single.py`` behavior, which also let the
+    in-flight episode complete before exiting.
+
+    Args:
+        sequence: Iterable of ``EpisodeSpec`` objects (typically a cycled list
+            of specs from a single scene).
+        scene_ids: Ordered list of all valid scene IDs.
+        max_steps: Total environment-step budget. Once reached, ``is_done``
+            flips to ``True`` at the next episode boundary.
+        render_mode: Render mode for ``MarioEnv``.
+        render_speed: Speed multiplier for rendering (1 = 60 fps).
+        stimuli_path: Override for the stimuli directory.
+        scenarios_dir: Override for the scenario files directory.
+    """
+
+    def __init__(
+        self,
+        sequence: Any,
+        scene_ids: list[str],
+        max_steps: int,
+        render_mode: str | None = None,
+        render_speed: float = 1.0,
+        stimuli_path: Path = STIMULI_PATH,
+        scenarios_dir: Path = SCENARIOS_DIR,
+    ) -> None:
+        super().__init__(
+            sequence=sequence,
+            scene_ids=scene_ids,
+            render_mode=render_mode,
+            render_speed=render_speed,
+            stimuli_path=stimuli_path,
+            scenarios_dir=scenarios_dir,
+        )
+        self._max_steps = int(max_steps)
+        self._step_count = 0
+
+    def step(
+        self, action: int
+    ) -> tuple[np.ndarray, float, bool, bool, dict]:
+        obs, reward, terminated, truncated, info = super().step(action)
+        self._step_count += 1
+        if self._step_count >= self._max_steps:
+            self._done = True
+        return obs, reward, terminated, truncated, info

@@ -31,7 +31,7 @@ Running evaluation
 
    mariha-evaluate \
      --subject     sub-01 \
-     --algorithm   ewc \
+     --agent       ewc \
      --run_prefix  20260322_120000_seed0 \
      --n_episodes  5 \
      --eval_diagonal
