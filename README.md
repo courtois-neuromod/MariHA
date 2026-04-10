@@ -53,17 +53,24 @@ cd data/mario.scenes && git annex get sub-*/
 
 ### Train (full CL curriculum)
 
+Agent and CL strategy are selected independently:
+
 ```bash
+# Vanilla agents (no continual-learning method)
 mariha-run-cl --agent sac --subject sub-01 --seed 0
-mariha-run-cl --agent ewc --subject sub-01 --seed 0
 mariha-run-cl --agent ppo --subject sub-01 --seed 0
 mariha-run-cl --agent dqn --subject sub-01 --seed 0
+
+# Compose any CL method on top of any agent
+mariha-run-cl --agent sac --cl_method ewc --subject sub-01 --seed 0
+mariha-run-cl --agent ppo --cl_method packnet --subject sub-01 --seed 0
+mariha-run-cl --agent dqn --cl_method der --subject sub-01 --seed 0
 ```
 
 Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time. Pair it with `--render_speed S` to slow down or speed up the playback (1.0 = 60 fps, 0.5 = 30 fps, 10 = up to 600 fps best-effort):
 
 ```bash
-mariha-run-cl --agent ewc --subject sub-01 --seed 0 --render_every 100 --render_speed 0.5
+mariha-run-cl --agent sac --cl_method ewc --subject sub-01 --seed 0 --render_every 100 --render_speed 0.5
 ```
 
 ### Train (single scene, for debugging)
@@ -87,36 +94,52 @@ mariha-run-single --agent sac --scene_id w1l1s0 --seed 0 --render_every 10 --ren
 ```bash
 mariha-evaluate \
   --subject sub-01 \
-  --agent ewc \
+  --agent sac \
+  --cl_method ewc \
   --run_prefix <timestamp_seed0> \
   --n_episodes 5 \
   --eval_diagonal          # adds BWT / forgetting metrics
 ```
 
-Outputs `experiments/sub-01/ewc/<run_prefix>/eval_results.json`.
+Outputs `experiments/sub-01/sac_ewc/<run_prefix>/eval_results.json`.
 
 ---
 
-## Agents
+## Agents and CL methods
 
-| `--agent` | Class | Description |
-|-----------|-------|-------------|
-| `sac` | `SAC` | Vanilla SAC — fine-tune sequentially |
+Agent and continual-learning method are selected independently:
+``--agent`` picks the RL algorithm, ``--cl_method`` (optional) picks the
+CL strategy that is composed on top of it.
+
+### Agents (`--agent`)
+
+| Name | Class | Description |
+|------|-------|-------------|
+| `sac` | `SAC` | Discrete-action Soft Actor-Critic |
 | `ppo` | `PPO` | Proximal Policy Optimization (on-policy) |
 | `dqn` | `DQN` | Deep Q-Network (epsilon-greedy) |
 | `ddqn` | `DQN` | Double DQN (alias for `dqn` with `--double_dqn=True`) |
-| `random` | `RandomAgent` | Random action baseline |
-| `l2` | `L2_SAC` | L2 regularisation (uniform importance) |
-| `ewc` | `EWC_SAC` | Elastic Weight Consolidation (Fisher diagonal) |
-| `mas` | `MAS_SAC` | Memory Aware Synapses (output sensitivity) |
-| `si` | `SI_SAC` | Synaptic Intelligence (online surrogate) |
-| `owl` | `OWL_SAC` | EWC + UCB1 bandit task weighting |
-| `packnet` | `PackNet_SAC` | Iterative weight pruning and freezing |
-| `agem` | `AGEM_SAC` | Averaged Gradient Episodic Memory |
-| `vcl` | `VCL_SAC` | Variational Continual Learning (Bayesian weights) |
-| `der` | `DER_SAC` | Dark Experience Replay++ (actor distillation) |
-| `clonex` | `ClonEx_SAC` | ClonEx (actor + critic distillation) |
-| `multitask` | `MultiTask_SAC` | Joint training upper bound (shared replay) |
+| `random` | `RandomAgent` | Random-action baseline |
+
+### CL methods (`--cl_method`)
+
+Omit ``--cl_method`` to fine-tune sequentially with no CL strategy.
+
+| Name | Class | Description |
+|------|-------|-------------|
+| `l2` | `L2Regularizer` | L2 anchor (uniform importance) |
+| `ewc` | `EWC` | Elastic Weight Consolidation (Fisher diagonal) |
+| `mas` | `MAS` | Memory Aware Synapses (output sensitivity) |
+| `si` | `SI` | Synaptic Intelligence (online surrogate) |
+| `packnet` | `PackNet` | Iterative magnitude pruning and freezing |
+| `agem` | `AGEM` | Averaged Gradient Episodic Memory (gradient projection) |
+| `der` | `DER` | Dark Experience Replay (actor / Q-value distillation) |
+| `clonex` | `ClonEx` | DER + critic distillation |
+| `multitask` | `MultiTask` | Joint training upper bound (shared replay) |
+
+Every CL method works with every RL agent through the agent-agnostic
+hooks (``get_named_parameter_groups``, ``forward_for_importance``,
+``distill_targets``).  Example: ``mariha-run-cl --agent dqn --cl_method ewc``.
 
 ---
 
@@ -144,7 +167,7 @@ MariHA/
 │   ├── env/           # MarioEnv, SceneEnv, ContinualLearningEnv, wrappers
 │   ├── replay/        # FIFO, Reservoir, PER, EpisodicMemory, Rollout buffers
 │   ├── rl/            # SAC, PPO, DQN training loops + network architectures
-│   ├── methods/       # 12 CL baseline implementations (SAC-based)
+│   ├── methods/       # CL methods composed on any agent
 │   └── eval/          # CL metrics, eval runner
 ├── scripts/
 │   ├── run_cl.py      # Full CL training (mariha-run-cl)
@@ -176,14 +199,15 @@ MariHA/
 From COOM, MariHA inherits:
 
 - The discrete-action SAC implementation and two-input `(obs, task_one_hot)` architecture
-- The `Regularization_SAC` base class and the `l2`, `ewc`, `mas`, `agem`, `packnet`, `vcl` baselines
+- The conceptual catalogue of CL baselines (`l2`, `ewc`, `mas`, `agem`, `packnet`, `der`, `clonex`)
 - The `fifo` / `reservoir` / `priority` / `per` replay buffer stack
 
 MariHA extends COOM with:
 
 - **Human-aligned curriculum**: episodes are derived from real human gameplay recordings (6 subjects, 313 scenes, ~5 k clips), rather than procedurally generated levels
 - **NES Super Mario Bros environment**: `stable-retro` integration replacing the ViZDoom stack
-- **Additional CL baselines**: `si`, `owl`, `der`, `clonex`, `multitask`
+- **Agent-agnostic CL composition**: every CL method runs on any RL agent (SAC, PPO, DQN) via shared hooks, instead of inheriting from a SAC-only base class
+- **Additional baselines and agents**: `si`, `multitask`, plus PPO and DQN agents alongside SAC
 - **Evaluation suite**: CL performance matrix (AP, BWT, forgetting, plasticity) + behavioral metrics (`clear_rate`, `mean_x_traveled`, `death_rate`) computed from the same scenes used during training
 
 ```bibtex

@@ -7,13 +7,17 @@ Usage::
 
     python scripts/evaluate.py \\
         --subject sub-01 \\
-        --agent ewc \\
+        --agent sac \\
+        --cl_method ewc \\
         --run_prefix 20260322_120000_seed0 \\
         --n_episodes 5
 
 Or with the installed entry point::
 
-    mariha-evaluate --subject sub-01 --agent ewc --run_prefix ...
+    mariha-evaluate --subject sub-01 --agent sac --cl_method ewc --run_prefix ...
+
+The ``--cl_method`` flag is optional; omit it to evaluate a vanilla
+agent run.
 
 Outputs a ``results.json`` in the run directory containing:
 
@@ -82,6 +86,13 @@ def build_eval_parser() -> argparse.ArgumentParser:
         "--agent",
         default="sac",
         help="Agent name (from registry).",
+    )
+    p.add_argument(
+        "--cl_method",
+        default=None,
+        help="Continual learning method composed during training "
+        "(must match the value passed to mariha-run-cl). Omit for "
+        "vanilla agent runs.",
     )
     p.add_argument(
         "--run_prefix",
@@ -156,7 +167,13 @@ def main() -> None:
 
     experiment_dir = Path(args.experiment_dir)
     agent_name = args.agent
-    checkpoint_base = experiment_dir / "checkpoints" / agent_name
+    cl_name = args.cl_method
+    # Composite label used by ``run_cl.py`` / ``run_single.py`` after CL
+    # composition: bare agent name for vanilla runs, ``{agent}_{cl}`` for
+    # CL-augmented runs.  Checkpoint and output dirs are keyed off this so
+    # different CL methods on the same base agent never collide.
+    run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
+    checkpoint_base = experiment_dir / "checkpoints" / run_label
 
     # ------------------------------------------------------------------ #
     # Discover checkpoints
@@ -281,6 +298,8 @@ def main() -> None:
         "metadata": {
             "subject": args.subject,
             "agent": agent_name,
+            "cl_method": cl_name,
+            "run_label": run_label,
             "run_prefix": args.run_prefix,
             "n_episodes": args.n_episodes,
             "n_scenes": len(scenes_to_eval),
@@ -298,7 +317,7 @@ def main() -> None:
         out_path = Path(args.output)
     else:
         run_dir = (
-            experiment_dir / args.subject / agent_name / args.run_prefix
+            experiment_dir / args.subject / run_label / args.run_prefix
         )
         run_dir.mkdir(parents=True, exist_ok=True)
         out_path = run_dir / "eval_results.json"

@@ -8,7 +8,9 @@ learning new scenes — mirroring the sequential nature of human learning.
 
 MariHA extends the architecture of `COOM <https://github.com/TTomilin/COOM>`_
 (a VizDoom-based CRL benchmark) to the pixel-based, human-grounded Mario
-domain.
+domain.  Three RL agents (SAC, PPO, DQN) share a common
+:class:`~mariha.rl.base.BaseAgent` training loop, and nine CL baselines
+compose onto any of them through agent-agnostic hooks.
 
 .. grid:: 2
    :gutter: 2
@@ -23,13 +25,13 @@ domain.
       :link: architecture
       :link-type: doc
 
-      How the modules fit together: curriculum → env → SAC → CL method → eval.
+      How the modules fit together: curriculum → env → BaseAgent → CL method → eval.
 
    .. grid-item-card:: CL Methods
       :link: cl_methods
       :link-type: doc
 
-      All 12 continual learning baselines: how they work and how to configure them.
+      Nine continual learning baselines, composable on any RL agent.
 
    .. grid-item-card:: API Reference
       :link: api/index
@@ -49,6 +51,8 @@ domain.
    training
    cl_methods
    evaluation
+   adding_an_agent
+   adding_a_cl_method
 
 .. toctree::
    :maxdepth: 2

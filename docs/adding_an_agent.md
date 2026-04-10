@@ -2,7 +2,20 @@
 
 This guide explains how to implement a new RL agent and run it against
 the full MariHA benchmark — the same curriculum, CL metrics, and behavioral
-metrics used by all built-in agents (SAC, DDQN, PPO, MuZero, …).
+metrics used by all built-in agents (SAC, PPO, DQN, …).
+
+There are two paths, and you should pick the one that matches your goals:
+
+| Path                                          | Use it when                                                                                                          | Code size                  |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| **A. `BaseAgent` mixin** (`mariha.rl.base`)   | You want to plug a standard episode-driven RL agent into the same training loop SAC/PPO/DQN already use, *and* you want every CL method to work on your agent for free. | ~100–150 lines             |
+| **B. `BenchmarkAgent` from scratch**          | Your agent is exotic enough that the standard loop doesn't fit (e.g. an offline RL agent, an LLM-prompted policy, a planner with no gradient steps), or you simply want to copy `RandomAgent` and start hacking. | one self-contained file    |
+
+This guide covers path **B** in detail (the canonical
+`RandomAgent` template) and points to the right places in the codebase
+for path **A**. Most contributors writing a new gradient-based RL
+agent should pick path **A** — see the `Path A` section at the bottom
+of this page.
 
 ---
 
@@ -316,3 +329,120 @@ With `--eval_diagonal`, `cl_metrics` also includes `BWT`, `forgetting`, and
 - [ ] Add `register("myagent")(MyAgent)` to `mariha/rl/__init__.py`
 - [ ] Test: `mariha-run-cl --agent myagent --subject sub-01 --seed 0`
 - [ ] Evaluate: `mariha-evaluate --agent myagent --subject sub-01 --run_prefix <ts>`
+
+---
+
+## Path A: subclass `BaseAgent` and reuse the shared loop
+
+The three built-in agents (SAC, PPO, DQN) all subclass
+`mariha.rl.base.BaseAgent`, which is itself a `BenchmarkAgent` subclass
+that owns the episode-driven training loop once and exposes a small
+callback surface. If you go this route you do **not** write a `run()`
+method — `BaseAgent.run()` is final and delegates to the shared
+`TrainingLoopRunner`. You just implement the algorithm-specific pieces:
+
+| Required callback                                          | What it does                                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `select_action(*, obs, one_hot, global_step, ...)`          | Return `(action, extras)` for one training step. `extras` is forwarded to `store_transition`. |
+| `store_transition(*, obs, action, reward, ...)`             | Write the transition into your replay or rollout buffer.                                  |
+| `should_update(global_step)`                                | Return `True` when `update_step` should fire. Per-step (SAC, DQN) or per-rollout (PPO).   |
+| `update_step(*, global_step, current_task_idx)`             | Run one round of gradient updates.                                                        |
+| `save_weights(directory)` / `load_weights(directory)`       | Per-task checkpoint I/O.                                                                  |
+| `get_action(obs, one_hot, deterministic)`                   | The greedy evaluation action — same as the `BenchmarkAgent` contract.                     |
+
+Optional callbacks have sensible defaults:
+`on_task_change`, `handle_session_boundary`, `on_episode_end`,
+`log_after_epoch`, `get_log_tabular_keys`, `on_burn_in_start`,
+`on_burn_in_end`. Override only what you need.
+
+If you also want every CL method to work on your agent, implement the
+three agent-agnostic CL hooks:
+
+| CL hook                                          | What it returns                                                                                          |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `get_named_parameter_groups()`                   | `dict[str, list[tf.Variable]]` of logical parameter groups. Pick names from `actor`, `policy`, `q`, `critic1`, `critic2`, `value`, or invent your own. |
+| `forward_for_importance(obs, one_hot)`           | One differentiable output tensor per group, used by EWC/MAS.                                             |
+| `distill_targets(obs, one_hot)`                  | Targets for distillation methods. Return `{"actor_logits": ...}` for stochastic policies, `{"q_values": ...}` for value-based agents. |
+
+The default group resolution `actor → policy → q` means that as long
+as one of those keys exists in your `get_named_parameter_groups`
+output, every regularizer (L2, EWC, MAS, SI), pruner (PackNet), and
+projector (AGEM) will pick the right target without any per-method
+configuration.
+
+A 130-line A2C skeleton that opts into the full agent-agnostic CL
+matrix looks like this:
+
+```python
+from mariha.benchmark.registry import register
+from mariha.rl.base import BaseAgent
+
+@register("a2c")
+class A2C(BaseAgent):
+    update_granularity = "per_rollout"  # informational
+
+    def __init__(self, env, logger, scene_ids, *, agent_name="a2c",
+                 lr=3e-4, gamma=0.99, rollout_length=128, **kwargs):
+        super().__init__(env, logger, scene_ids,
+                         agent_name=agent_name, **kwargs)
+        # ... build network, rollout buffer, optimizer ...
+
+    # --- Required BaseAgent callbacks ---
+
+    def select_action(self, *, obs, one_hot, global_step, task_step,
+                      current_task_idx):
+        ...
+        return action, {"value": value, "log_prob": log_prob}
+
+    def store_transition(self, *, obs, action, reward, next_obs,
+                         terminated, truncated, one_hot, scene_id,
+                         info, extras):
+        self.rollout.store(...)
+
+    def should_update(self, global_step):
+        return self.rollout.full
+
+    def update_step(self, *, global_step, current_task_idx):
+        ...one A2C update over the rollout...
+        self.rollout.reset()
+
+    def save_weights(self, directory):
+        self.policy.save_weights(directory / "policy.h5")
+
+    def load_weights(self, directory):
+        self.policy.load_weights(directory / "policy.h5")
+
+    def get_action(self, obs, task_one_hot, deterministic=False):
+        ...
+
+    # --- Optional: opt into agent-agnostic CL ---
+
+    def get_named_parameter_groups(self):
+        return {"policy": self.policy.trainable_variables}
+
+    def forward_for_importance(self, obs, one_hot):
+        return {"policy": self.policy(obs, one_hot)}
+
+    def distill_targets(self, obs, one_hot):
+        return {"actor_logits": self.policy(obs, one_hot)}
+
+    # --- CLI plumbing ---
+
+    @classmethod
+    def add_args(cls, parser): ...
+    @classmethod
+    def from_args(cls, args, env, logger, scene_ids): ...
+```
+
+Run it the same way as any other agent — including with any CL method:
+
+```bash
+mariha-run-cl --agent a2c --subject sub-01 --seed 0
+mariha-run-cl --agent a2c --cl_method ewc --subject sub-01 --seed 0
+mariha-run-cl --agent a2c --cl_method packnet --subject sub-01 --seed 0
+```
+
+For a real example see `mariha/rl/dqn.py` (simplest of the three) or
+`mariha/rl/ppo.py` (per-rollout pattern). For the agent-side
+contract details look at the `BaseAgent` callback documentation in
+`mariha/rl/base/agent_base.py`.

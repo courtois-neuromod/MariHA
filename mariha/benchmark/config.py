@@ -35,6 +35,15 @@ def _add_common_flags(p: argparse.ArgumentParser) -> None:
              "its specific flags.",
     )
     p.add_argument(
+        "--cl_method",
+        type=str,
+        default=None,
+        help="Continual learning method to compose with the agent "
+             "(must be registered in mariha.methods). Omit for vanilla "
+             "training. Run `mariha-run-cl --agent X --cl_method Y --help` "
+             "to see CL-method-specific flags.",
+    )
+    p.add_argument(
         "--subject",
         type=str,
         default="sub-01",
@@ -234,16 +243,20 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     # Logger — built before the env so the progress tracker can borrow
     # ``logger.log`` as its fallback output.
     agent_name = getattr(args, "agent", None) or "sac"
-    timestamp = get_readable_timestamp()
+    cl_name = getattr(args, "cl_method", None)
+    run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
+    # Compose timestamp + seed once and stash it on ``args`` so the agent's
+    # ``from_args`` reads the same string when constructing checkpoint paths.
+    # This guarantees the run-dir leaf and the checkpoint-dir leaf share a
+    # common prefix that ``mariha-evaluate --run_prefix`` can target.
+    args.run_timestamp = f"{get_readable_timestamp()}_seed{args.seed}"
     experiment_dir = Path(args.experiment_dir)
-    run_dir = str(
-        experiment_dir / args.subject / agent_name / f"{timestamp}_seed{args.seed}"
-    )
+    run_dir = str(experiment_dir / args.subject / run_label / args.run_timestamp)
     logger = EpochLogger(
         output_dir=run_dir,
         logger_output=args.logger_output,
         config=vars(args),
-        group_id=f"{args.subject}_{agent_name}",
+        group_id=f"{args.subject}_{run_label}",
     )
 
     # Progress display — constructed before the env so the env can fire
@@ -252,7 +265,7 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     # ``progress.extra_metrics`` without any agent-side plumbing.
     progress = build_progress(getattr(args, "progress", "live"), fallback_log=logger.log)
     progress.init_meta(
-        agent_name=agent_name,
+        agent_name=run_label,
         subject=args.subject,
         seed=args.seed,
         clip_total=len(sequence),
@@ -371,25 +384,30 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
     # Cycle the specs forever; StepBudgetCLEnv stops at args.total_steps.
     spec_cycle = itertools.cycle(scene_specs)
 
-    # Logger path: experiments/single/{scene_id}/{agent}/{timestamp}_seed{seed}
+    # Logger path: experiments/single/{scene_id}/{agent[_cl]}/{timestamp}_seed{seed}
     agent_name = getattr(args, "agent", None) or "sac"
-    timestamp = get_readable_timestamp()
+    cl_name = getattr(args, "cl_method", None)
+    run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
+    # Compose the timestamp + seed once and stash on ``args`` so the agent's
+    # ``from_args`` reads the same string when constructing checkpoint paths
+    # (see :func:`build_benchmark_context` for the matching CL-mode pattern).
+    args.run_timestamp = f"{get_readable_timestamp()}_seed{args.seed}"
     experiment_dir = Path(args.experiment_dir)
     run_dir = str(
-        experiment_dir / "single" / scene_id / agent_name / f"{timestamp}_seed{args.seed}"
+        experiment_dir / "single" / scene_id / run_label / args.run_timestamp
     )
     logger = EpochLogger(
         output_dir=run_dir,
         logger_output=args.logger_output,
         config=vars(args),
-        group_id=f"single_{scene_id}_{agent_name}",
+        group_id=f"single_{scene_id}_{run_label}",
     )
 
     # In single-scene mode the cycled spec set has no fixed length; the
     # primary progress signal is the env-step budget instead.
     progress = build_progress(getattr(args, "progress", "live"), fallback_log=logger.log)
     progress.init_meta(
-        agent_name=agent_name,
+        agent_name=run_label,
         subject=args.subject,
         seed=args.seed,
         clip_total=len(scene_specs),

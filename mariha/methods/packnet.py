@@ -1,137 +1,291 @@
 """PackNet continual learning baseline.
 
-At the end of each task a fixed fraction (``prune_perc``) of the
-currently active actor weights are pruned — frozen at their current values
-and protected from future gradient updates.  New tasks train only on the
-remaining free weights.
+At the end of each task PackNet prunes a fixed fraction
+(``prune_perc``) of the currently free actor weights — the lowest-
+magnitude ones — and freezes them at their current values.  Future
+tasks train only on the remaining unfrozen weights via three
+mechanisms:
 
-Unlike COOM's dynamic ``num_tasks_left / (num_tasks_left + 1)`` schedule,
-MariHA uses a fixed ``prune_perc`` because the benchmark has 313+ scenes
-and the total task count is not known in advance for scheduling.
+1. **Gradient masking** in :meth:`adjust_gradients` zeroes out the
+   gradient of every frozen parameter so the optimizer cannot push
+   them further.
+2. **Adam-drift correction** in :meth:`after_gradient_step` re-asserts
+   the frozen value after the optimizer step (Adam's momentum/RMS
+   slot variables can drift even when the gradient is zero).
+3. **Magnitude pruning** in :meth:`on_task_end` selects the lowest-
+   magnitude *free* weights and adds them to the frozen set.
 
-Reference: Mallya & Lazebnik, 2018 — arXiv:1711.05769.
+Unlike COOM's dynamic ``num_tasks_left / (num_tasks_left + 1)``
+schedule, MariHA uses a fixed ``prune_perc`` because the benchmark
+has 313+ scenes and the total task count is not known in advance.
+
+Reference: Mallya & Lazebnik, 2018 — *PackNet: Adding Multiple Tasks
+to a Single Network by Iterative Pruning*, arXiv:1711.05769.
+
+Agent-agnostic
+--------------
+PackNet operates on whatever group :meth:`BaseAgent.get_named_parameter_groups`
+exposes for the agent's actor — for SAC the ``"actor"`` group, for
+PPO the ``"policy"`` group, and for DQN the ``"q"`` group (the
+single trainable network).  Selection follows the same default
+``actor → policy → q`` resolution as :class:`ParameterRegularizer`.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+import argparse
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 import numpy as np
 import tensorflow as tf
 
-from mariha.rl.sac import SAC
+from mariha.benchmark.cl_registry import register_cl
+from mariha.methods.base import CLMethod
+
+if TYPE_CHECKING:
+    from mariha.rl.base.agent_base import BaseAgent
 
 
-class PackNet_SAC(SAC):
-    """PackNet iterative pruning for the actor network.
+@register_cl("packnet")
+class PackNet(CLMethod):
+    """PackNet iterative magnitude pruning.
 
     Args:
-        prune_perc: Fraction of currently free actor weights to prune at
-            each task boundary.  Must be in (0, 1).
-        **kwargs: Forwarded to :class:`~mariha.rl.sac.SAC`.
+        prune_perc: Fraction of currently *free* weights to prune at
+            each task boundary.  Must be in ``(0, 1)``.  A value of
+            0.5 halves the active capacity at every task switch.
+        regularize_groups: Group names to prune.  Defaults to a
+            single group from the ``actor → policy → q`` resolution.
     """
+
+    name = "packnet"
 
     def __init__(
         self,
         prune_perc: float = 0.5,
-        **kwargs,
+        regularize_groups: Optional[Sequence[str]] = None,
     ) -> None:
-        super().__init__(**kwargs)
-        if not 0 < prune_perc < 1:
-            raise ValueError(f"prune_perc must be in (0, 1), got {prune_perc}")
-        self.prune_perc = prune_perc
+        if not 0.0 < prune_perc < 1.0:
+            raise ValueError(
+                f"prune_perc must be in (0, 1), got {prune_perc}"
+            )
+        self.prune_perc = float(prune_perc)
+        self._regularize_groups: Optional[List[str]] = (
+            list(regularize_groups) if regularize_groups else None
+        )
 
-        # 1.0 = free to update, 0.0 = frozen.
-        self._free_masks: List[tf.Variable] = [
-            tf.Variable(tf.ones_like(v), trainable=False, dtype=tf.float32)
-            for v in self.actor.trainable_variables
-        ]
-        # Stores the frozen parameter values so Adam drift can be corrected.
-        self._frozen_weights: List[tf.Variable] = [
-            tf.Variable(tf.zeros_like(v), trainable=False)
-            for v in self.actor.trainable_variables
-        ]
-        # Whether any weights have been pruned yet (tracked at Python level
-        # so @tf.function can specialise — recompiled at each task change).
-        self._has_frozen = False
-
-    # ------------------------------------------------------------------
-    # Override apply_update to restore frozen weights after Adam step
-    # ------------------------------------------------------------------
-
-    def apply_update(
-        self,
-        actor_gradients: List[tf.Tensor],
-        critic_gradients: List[tf.Tensor],
-        alpha_gradient: Optional[tf.Tensor],
-    ) -> None:
-        """Apply gradients then restore Adam-drifted frozen weights."""
-        super().apply_update(actor_gradients, critic_gradients, alpha_gradient)
-        if self._has_frozen:
-            for var, mask, frozen in zip(
-                self.actor.trainable_variables, self._free_masks, self._frozen_weights
-            ):
-                # var = var * free_mask + frozen * pruned_mask
-                var.assign(var * mask + frozen)
+        # Lazily allocated dicts of ``tf.Variable`` lists, populated
+        # on the first ``_lazy_init`` call.
+        self._free_masks: Optional[Dict[str, List[tf.Variable]]] = None
+        self._frozen_weights: Optional[Dict[str, List[tf.Variable]]] = None
+        # Python flag (not a tf.Variable) — recompiled into the
+        # per-task @tf.function trace via the closure capture in
+        # the agent's _make_*_step_fn.
+        self._has_frozen: bool = False
 
     # ------------------------------------------------------------------
-    # CL extension points
+    # Group resolution + lazy init
+    # ------------------------------------------------------------------
+
+    def _resolve_regularize_groups(self, agent: "BaseAgent") -> List[str]:
+        groups = agent.get_named_parameter_groups()
+        for default in ("actor", "policy", "q"):
+            if default in groups:
+                return [default]
+        return list(groups.keys())
+
+    def _lazy_init(self, agent: "BaseAgent") -> None:
+        """Allocate ``_free_masks`` and ``_frozen_weights`` dicts.
+
+        Safe to call from inside a ``tf.function`` trace: the body
+        runs in eager Python at trace time so the resulting Variables
+        are captured by identity.
+        """
+        if self._free_masks is not None:
+            return
+        if self._regularize_groups is None:
+            self._regularize_groups = self._resolve_regularize_groups(agent)
+
+        groups = agent.get_named_parameter_groups()
+        missing = [g for g in self._regularize_groups if g not in groups]
+        if missing:
+            raise ValueError(
+                f"PackNet: regularize_groups {missing} not present on "
+                f"{type(agent).__name__}.  Available groups: "
+                f"{sorted(groups.keys())}"
+            )
+
+        self._free_masks = {
+            gn: [
+                tf.Variable(
+                    tf.ones_like(v),
+                    trainable=False,
+                    dtype=tf.float32,
+                    name=f"packnet_mask_{gn}_{i}",
+                )
+                for i, v in enumerate(groups[gn])
+            ]
+            for gn in self._regularize_groups
+        }
+        self._frozen_weights = {
+            gn: [
+                tf.Variable(
+                    tf.zeros_like(v),
+                    trainable=False,
+                    name=f"packnet_frozen_{gn}_{i}",
+                )
+                for i, v in enumerate(groups[gn])
+            ]
+            for gn in self._regularize_groups
+        }
+
+    # ------------------------------------------------------------------
+    # CLMethod hooks
     # ------------------------------------------------------------------
 
     def adjust_gradients(
         self,
-        actor_gradients: List[tf.Tensor],
-        critic_gradients: List[tf.Tensor],
-        alpha_gradient,
-        current_task_idx: int,
-        metrics: dict,
-        episodic_batch=None,
-    ) -> Tuple:
-        """Zero out gradients for frozen (pruned) weights."""
-        masked = [
-            g * m if g is not None else g
-            for g, m in zip(actor_gradients, self._free_masks)
-        ]
-        return masked, critic_gradients, alpha_gradient
+        agent: "BaseAgent",
+        grads_by_group: Dict[str, List[Optional[tf.Tensor]]],
+        *,
+        task_idx: int,
+        episodic_batch: Optional[Dict[str, tf.Tensor]] = None,
+    ) -> Dict[str, List[Optional[tf.Tensor]]]:
+        """Zero out gradients of frozen parameters.
 
-    def on_task_end(self, current_task_idx: int) -> None:
-        super().on_task_end(current_task_idx)
-        self._prune_actor()
-
-    # ------------------------------------------------------------------
-    # Pruning (numpy — called outside @tf.function)
-    # ------------------------------------------------------------------
-
-    def _prune_actor(self) -> None:
-        """Prune ``prune_perc`` of free actor weights by lowest magnitude."""
-        for i, (var, mask, frozen) in enumerate(
-            zip(self.actor.trainable_variables, self._free_masks, self._frozen_weights)
-        ):
-            var_np = var.numpy()
-            mask_np = mask.numpy()
-
-            free_indices = np.where(mask_np.flatten() > 0.5)[0]
-            if len(free_indices) == 0:
+        On the first task no weights are frozen yet, so the masks are
+        all ones and this is a no-op.  On subsequent tasks the masks
+        carry the cumulative free-weight pattern.
+        """
+        self._lazy_init(agent)
+        out: Dict[str, List[Optional[tf.Tensor]]] = dict(grads_by_group)
+        for gn in self._regularize_groups:
+            if gn not in grads_by_group:
                 continue
+            masked: List[Optional[tf.Tensor]] = []
+            for g, m in zip(grads_by_group[gn], self._free_masks[gn]):
+                if g is None:
+                    masked.append(None)
+                else:
+                    masked.append(g * m)
+            out[gn] = masked
+        return out
 
-            n_prune = max(1, int(len(free_indices) * self.prune_perc))
-            magnitudes = np.abs(var_np.flatten())
-            free_mags = magnitudes[free_indices]
+    def after_gradient_step(
+        self,
+        agent: "BaseAgent",
+        grads_by_group: Dict[str, List[Optional[tf.Tensor]]],
+        *,
+        task_idx: int,
+        metrics: Optional[Dict[str, tf.Tensor]] = None,
+    ) -> None:
+        """Restore frozen weights after the optimizer step.
 
-            # Select the n_prune lowest-magnitude free weights.
-            prune_local_idx = np.argpartition(free_mags, n_prune - 1)[:n_prune]
-            prune_global_idx = free_indices[prune_local_idx]
+        Even with zero gradient Adam can drift a parameter via its
+        first/second-moment slot variables.  We re-assert the frozen
+        value as ``var = var * mask + frozen``, which is a no-op for
+        free weights (mask=1, frozen=0) and snaps frozen weights back
+        to their stored value (mask=0, frozen=stored).
 
-            flat_mask = mask_np.flatten().copy()
-            flat_mask[prune_global_idx] = 0.0
-            new_mask = flat_mask.reshape(var_np.shape)
-            mask.assign(new_mask)
+        Skipped at trace time when no weights have been frozen yet
+        (the ``_has_frozen`` Python flag is captured by the per-task
+        recompile, so the first task's compiled graph contains no
+        restoration code).
+        """
+        if not self._has_frozen:
+            return
+        self._lazy_init(agent)
+        groups = agent.get_named_parameter_groups()
+        for gn in self._regularize_groups:
+            for v, mask, frozen in zip(
+                groups[gn],
+                self._free_masks[gn],
+                self._frozen_weights[gn],
+            ):
+                v.assign(v * mask + frozen)
 
-            # Record frozen values — pruned weights stay at current values.
-            frozen.assign(var_np * (1.0 - new_mask))
+    def on_task_end(self, agent: "BaseAgent", task_idx: int) -> None:
+        """Prune ``prune_perc`` of currently free weights by lowest magnitude.
+
+        Each variable is pruned independently — we never compare
+        magnitudes across layers, matching the original PackNet
+        formulation.  After this hook the agent's ``on_task_change``
+        will recompile its ``_make_*_step_fn`` for the next task,
+        and the new trace picks up the updated ``_has_frozen`` flag.
+        """
+        self._lazy_init(agent)
+        groups = agent.get_named_parameter_groups()
+        for gn in self._regularize_groups:
+            for var, mask, frozen in zip(
+                groups[gn],
+                self._free_masks[gn],
+                self._frozen_weights[gn],
+            ):
+                var_np = var.numpy()
+                mask_np = mask.numpy()
+
+                free_indices = np.where(mask_np.flatten() > 0.5)[0]
+                if len(free_indices) == 0:
+                    continue
+
+                n_prune = max(1, int(len(free_indices) * self.prune_perc))
+                magnitudes = np.abs(var_np.flatten())
+                free_mags = magnitudes[free_indices]
+
+                # Pick the n_prune lowest-magnitude free weights.
+                prune_local_idx = np.argpartition(
+                    free_mags, n_prune - 1
+                )[:n_prune]
+                prune_global_idx = free_indices[prune_local_idx]
+
+                flat_mask = mask_np.flatten().copy()
+                flat_mask[prune_global_idx] = 0.0
+                new_mask = flat_mask.reshape(var_np.shape)
+                mask.assign(new_mask)
+                # Frozen tensor stores the value at pruning time —
+                # masked out for currently-free weights so the
+                # restoration formula ``var * mask + frozen`` works.
+                frozen.assign(var_np * (1.0 - new_mask))
 
         self._has_frozen = True
-        self.logger.log(
-            f"PackNet: pruned {self.prune_perc*100:.0f}% of free actor weights.",
+        agent.logger.log(
+            f"[packnet] Pruned {self.prune_perc * 100:.0f}% of free "
+            f"weights in groups {self._regularize_groups}.",
             color="cyan",
+        )
+
+    # ------------------------------------------------------------------
+    # CLI integration
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def add_args(cls, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--prune_perc",
+            type=float,
+            default=0.5,
+            help="Fraction of free weights to prune at each task boundary.",
+        )
+        parser.add_argument(
+            "--regularize_groups",
+            type=str,
+            default=None,
+            help=(
+                "Comma-separated parameter-group names to prune. "
+                "Defaults to actor/policy/q (the first one present)."
+            ),
+        )
+
+    @classmethod
+    def from_args(
+        cls, args: argparse.Namespace, agent: "BaseAgent"
+    ) -> "PackNet":
+        groups = (
+            [g.strip() for g in args.regularize_groups.split(",") if g.strip()]
+            if getattr(args, "regularize_groups", None)
+            else None
+        )
+        return cls(
+            prune_perc=getattr(args, "prune_perc", 0.5),
+            regularize_groups=groups,
         )

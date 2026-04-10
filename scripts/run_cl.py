@@ -1,15 +1,22 @@
 """Continual learning training script.
 
 Runs any registered agent on the full human-aligned curriculum for a
-given subject.
+given subject.  An optional ``--cl_method`` flag composes any registered
+continual-learning method on top of the agent.
 
 Usage::
 
+    # Vanilla agents (no CL strategy)
     mariha-run-cl --agent sac --subject sub-01 --seed 0
-    mariha-run-cl --agent ewc --subject sub-01 --seed 0
     mariha-run-cl --agent ppo --subject sub-01 --seed 0
+    mariha-run-cl --agent dqn --subject sub-01 --seed 0
 
-Run ``mariha-run-cl --agent <name> --help`` to see agent-specific flags.
+    # Compose any CL method on any agent
+    mariha-run-cl --agent sac --cl_method ewc --subject sub-01 --seed 0
+    mariha-run-cl --agent dqn --cl_method der --subject sub-01 --seed 0
+
+Run ``mariha-run-cl --agent <name> --cl_method <name> --help`` to see
+the union of agent-specific and CL-method-specific flags.
 """
 
 from __future__ import annotations
@@ -23,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def main() -> None:
     # ------------------------------------------------------------------
-    # Phase 1: parse benchmark-only flags so we know which agent to use
+    # Phase 1: parse benchmark-only flags so we know which agent + CL
+    # method to use
     # ------------------------------------------------------------------
     from mariha.benchmark.config import build_benchmark_parser
 
@@ -31,9 +39,11 @@ def main() -> None:
     bench_args, _ = bench_parser.parse_known_args()
 
     # ------------------------------------------------------------------
-    # Phase 2: trigger registry population, look up agent class
+    # Phase 2: trigger registry population, look up agent + CL classes
     # ------------------------------------------------------------------
     import mariha.rl  # noqa: F401 — registers all built-in agents
+    import mariha.methods  # noqa: F401 — registers all built-in CL methods
+    from mariha.benchmark.cl_registry import get_cl_class, list_cl_methods
     from mariha.benchmark.registry import get_agent_class, list_agents
 
     try:
@@ -43,16 +53,31 @@ def main() -> None:
         print(f"Registered agents: {list_agents()}")
         sys.exit(1)
 
+    cl_cls = None
+    if bench_args.cl_method:
+        try:
+            cl_cls = get_cl_class(bench_args.cl_method)
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            print(f"Registered CL methods: {list_cl_methods()}")
+            sys.exit(1)
+
     # ------------------------------------------------------------------
-    # Phase 3: build the full parser with agent-specific flags
+    # Phase 3: build the full parser with agent- and CL-method-specific
+    # flags
     # ------------------------------------------------------------------
+    title = bench_args.agent + (
+        f" + {bench_args.cl_method}" if bench_args.cl_method else ""
+    )
     full_parser = argparse.ArgumentParser(
-        description=f"MariHA CL benchmark — {bench_args.agent}",
+        description=f"MariHA CL benchmark — {title}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         parents=[bench_parser],
         add_help=True,
     )
     agent_cls.add_args(full_parser)
+    if cl_cls is not None:
+        cl_cls.add_args(full_parser)
     args = full_parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -63,9 +88,22 @@ def main() -> None:
     env, scene_ids, logger, sequence = build_benchmark_context(args)
 
     # ------------------------------------------------------------------
-    # Phase 5: instantiate agent and run
+    # Phase 5: instantiate agent + CL method and run
     # ------------------------------------------------------------------
     agent = agent_cls.from_args(args, env=env, logger=logger, scene_ids=scene_ids)
+
+    if cl_cls is not None:
+        agent.cl_method = cl_cls.from_args(args, agent)
+        # Tag the agent name so checkpoint dirs are namespaced by CL method,
+        # mirroring the composite ``run_label`` used for log/output paths in
+        # ``build_benchmark_context``.  This must happen before ``agent.run()``
+        # since the runner reads ``agent.agent_name`` when building the
+        # checkpoint path.
+        agent.agent_name = f"{agent.agent_name}_{bench_args.cl_method}"
+        logger.log(
+            f"[run-cl] Composing CL method: {bench_args.cl_method}",
+            color="cyan",
+        )
 
     # Burn-in phase (pre-curriculum warm-up on a single scene).
     burn_in_steps = getattr(args, "burn_in_steps", 0)
