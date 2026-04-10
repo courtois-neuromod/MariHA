@@ -170,6 +170,9 @@ class ContinualLearningEnv:
         scenarios_dir: Path = SCENARIOS_DIR,
     ) -> None:
         self._sequence_iter: Iterator = iter(sequence)
+        self._clip_total: int | None = (
+            len(sequence) if hasattr(sequence, "__len__") else None
+        )
         self._scene_ids = scene_ids
         self._render_mode = render_mode
         self._render_speed = render_speed
@@ -254,6 +257,17 @@ class ContinualLearningEnv:
         )
         self._current_session = spec.session
         info["episode_index"] = self._episode_count
+
+        # Expose spec-derived clip metadata so the progress tracker (and
+        # anything else downstream) can render curriculum position without
+        # reaching into _current_spec.
+        info["clip_code"] = spec.clip_code
+        info["clip_index"] = self._episode_count  # 0-based position in sequence
+        info["clip_total"] = self._clip_total
+        info["subject"] = spec.subject
+        info["level"] = spec.level
+        info["phase"] = spec.phase
+        info["human_outcome"] = spec.outcome
 
         self._episode_count += 1
         self._prefetch_next()

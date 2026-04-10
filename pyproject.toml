@@ -21,6 +21,7 @@ dependencies = [
     "tensorboard>=2.13",
     "opencv-python-headless>=4.8",  # grayscale + resize wrappers
     "tqdm>=4.65",
+    "rich>=13.0",                   # terminal progress dashboard
 ]
 
 [project.optional-dependencies]

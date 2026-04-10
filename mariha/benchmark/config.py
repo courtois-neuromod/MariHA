@@ -78,6 +78,15 @@ def _add_common_flags(p: argparse.ArgumentParser) -> None:
         default=["tsv", "tensorboard"],
         help="Logging backends: tsv, tensorboard, wandb.",
     )
+    p.add_argument(
+        "--progress",
+        type=str,
+        default="live",
+        choices=["live", "line", "off"],
+        help="Terminal progress display. 'live' = persistent rich dashboard "
+             "(default), 'line' = one enriched line per episode, "
+             "'off' = legacy per-episode print only.",
+    )
 
 
 def build_benchmark_parser() -> argparse.ArgumentParser:
@@ -194,6 +203,7 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     from mariha.env.scenario_gen import load_metadata
     from mariha.env.base import SCENARIOS_DIR
     from mariha.utils.logging import EpochLogger
+    from mariha.utils.progress import build_progress
 
     # Curriculum
     sequence = HumanSequence(
@@ -242,6 +252,18 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         config=vars(args),
         group_id=f"{args.subject}_{agent_name}",
     )
+
+    # Progress display — attached to the logger so agents can pick it up
+    # via `getattr(self.logger, "progress", None)`.
+    progress = build_progress(getattr(args, "progress", "live"), fallback_log=logger.log)
+    progress.init_meta(
+        agent_name=agent_name,
+        subject=args.subject,
+        seed=args.seed,
+        clip_total=len(sequence),
+        total_steps=None,
+    )
+    logger.progress = progress
 
     return env, scene_ids, logger, sequence
 
@@ -306,6 +328,7 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
     from mariha.env.scenario_gen import load_metadata
     from mariha.env.base import SCENARIOS_DIR
     from mariha.utils.logging import EpochLogger
+    from mariha.utils.progress import build_progress
 
     # Canonical scene ID ordering (alphabetical, consistent across runs).
     scene_meta = load_metadata(SCENARIOS_DIR)
@@ -363,5 +386,17 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
         config=vars(args),
         group_id=f"single_{scene_id}_{agent_name}",
     )
+
+    # In single-scene mode the cycled spec set has no fixed length; the
+    # primary progress signal is the env-step budget instead.
+    progress = build_progress(getattr(args, "progress", "live"), fallback_log=logger.log)
+    progress.init_meta(
+        agent_name=agent_name,
+        subject=args.subject,
+        seed=args.seed,
+        clip_total=len(scene_specs),
+        total_steps=args.total_steps,
+    )
+    logger.progress = progress
 
     return env, scene_ids, logger, scene_specs
