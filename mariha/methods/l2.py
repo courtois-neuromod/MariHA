@@ -1,45 +1,53 @@
-"""L2 regularisation continual learning baseline.
+"""L2 parameter regularization continual learning baseline.
 
-Penalises deviation from the previous task's parameters with uniform
-importance weights (i.e., all weights matter equally).
+Penalizes deviation from the previous task's parameters with uniform
+importance weights — every parameter is treated as equally important.
+The result is the simplest member of the EWC family: ``λ · Σ (θ − θ*)²``.
 
 Reference: Kirkpatrick et al., 2017 (baseline variant without Fisher).
 """
 
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List, Optional
 
 import tensorflow as tf
 
-from mariha.methods.regularization import Regularization_SAC
-from mariha.replay.buffers import ReplayBuffer
+from mariha.benchmark.cl_registry import register_cl
+from mariha.methods.regularizer_base import ParameterRegularizer
 
 
-class L2_SAC(Regularization_SAC):
-    """L2 regularisation method.
+@register_cl("l2")
+class L2Regularizer(ParameterRegularizer):
+    """Uniform-importance L2 anchor.
 
-    Uniform importance weights — all parameters penalised equally.
+    Sets every importance weight to 1.0, so the loss penalty becomes
+    ``λ · Σ (θ − θ*)²`` — the standard L2 baseline used as a reference
+    point in the EWC paper.  Inherits all the bookkeeping from
+    :class:`ParameterRegularizer`; the only behaviour overridden is
+    importance computation, which is data-free for this method.
 
-    Args:
-        cl_reg_coef: Regularisation coefficient λ.
-        regularize_critic: Also regularise critic weights.
-        **kwargs: Forwarded to :class:`~mariha.rl.sac.SAC`.
+    Args mirror :class:`ParameterRegularizer`.
     """
 
-    def _get_importance_weights(self, **batch) -> List[tf.Tensor]:
-        if self.regularize_critic:
-            return [tf.ones_like(p) for p in self.all_common_variables]
-        return (
-            [tf.ones_like(p) for p in self.actor_common_variables]
-            + [tf.zeros_like(p) for p in self.critic_common_variables]
-        )
+    name = "l2"
+    _needs_data = False
 
-    def _update_reg_weights(
+    def _compute_importance(
         self,
-        replay_buffer: ReplayBuffer,
-        batches_num: int = 10,
-        batch_size: int = 256,
-    ) -> None:
-        """L2 does not need data — just set weights to 1 (or 0 for critic)."""
-        self._merge_weights(self._get_importance_weights())
+        agent,
+        batch: Optional[Dict[str, tf.Tensor]],
+    ) -> Dict[str, List[tf.Tensor]]:
+        """Return ``ones_like`` for every parameter in every regularized group.
+
+        Note that we read the *parameter shapes* from
+        ``_reg_weights`` rather than from a fresh
+        ``get_named_parameter_groups()`` call so that, even if a future
+        agent rebuilds its variables between tasks, this method still
+        produces correctly shaped tensors aligned with the storage the
+        :meth:`ParameterRegularizer.compute_loss_penalty` reads from.
+        """
+        return {
+            gn: [tf.ones_like(w) for w in self._reg_weights[gn]]
+            for gn in self._regularize_groups
+        }

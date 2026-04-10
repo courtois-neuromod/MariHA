@@ -215,9 +215,16 @@ class EpochLogger(Logger):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._epoch_dict: Dict[str, List[float]] = {}
+        # Optional ``TrainingProgress`` tracker attached by the benchmark
+        # context builder.  When set, every scalar value passed to ``store``
+        # is forwarded to ``progress.update_metrics`` so agent-specific
+        # metrics (buffer_fill_pct, epsilon, entropy, ...) land in the
+        # terminal display without agents importing the progress module.
+        self.progress: Any = None
 
     def store(self, data: Dict[str, Any]) -> None:
         """Accumulate scalar values.  ``data`` may contain scalars, arrays, or TF tensors."""
+        forwarded: Dict[str, float] = {}
         for k, v in data.items():
             if k not in self._epoch_dict:
                 self._epoch_dict[k] = []
@@ -233,7 +240,19 @@ class EpochLogger(Logger):
             elif isinstance(v, (list, tuple)):
                 self._epoch_dict[k].extend([float(x) for x in v])
             else:
-                self._epoch_dict[k].append(float(v))
+                fv = float(v)
+                self._epoch_dict[k].append(fv)
+                forwarded[k] = fv
+
+        # Forward scalar values to the progress tracker (if any).  Only
+        # forward scalars — arrays and sequences are meant for TSV/TB
+        # aggregation, not single-value display widgets.
+        if self.progress is not None and forwarded:
+            try:
+                self.progress.update_metrics(**forwarded)
+            except Exception:
+                # Progress display must never break the training loop.
+                pass
 
     def log_tabular(
         self,

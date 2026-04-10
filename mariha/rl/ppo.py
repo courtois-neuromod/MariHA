@@ -1,15 +1,15 @@
 """Proximal Policy Optimization for the MariHA continual-learning benchmark.
 
-Architecture and hyperparameters are adapted from the ``ppo_study`` reference
-implementation (PyTorch), translated to TensorFlow/Keras.
+On-policy actor-critic with a fixed-length rollout buffer and clipped
+surrogate objective.  Architecture and hyperparameters are adapted from
+the ``ppo_study`` reference implementation (PyTorch), translated to
+TensorFlow / Keras.
 
-Key design choices:
-- Shared CNN backbone (4x Conv2D(32, 3x3, stride=2, same) + Dense(512))
-  with separate actor and critic heads.
-- On-policy: no replay buffer; uses a fixed-length rollout buffer with GAE.
-- Episode-driven loop: rollouts may span multiple episodes from the
-  ``ContinualLearningEnv`` curriculum.
-- Per-scene buffers (``buffer_mode``) are not applicable to PPO.
+Built on :class:`mariha.rl.base.BaseAgent` with
+``update_granularity="per_rollout"``: ``should_update`` returns True
+once the rollout buffer is full, at which point ``update_step``
+bootstraps the final value, computes GAE returns/advantages, runs
+``n_epochs`` of minibatch updates, and resets the buffer.
 
 Usage::
 
@@ -19,10 +19,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -32,25 +31,32 @@ try:
 except ImportError:
     import tensorflow.keras as _keras  # type: ignore[no-redef]
 
-from mariha.benchmark.agent import BenchmarkAgent
 from mariha.replay.buffers import RolloutBuffer
 from mariha.rl import models
+from mariha.rl.base import BaseAgent, run_burn_in
 from mariha.utils.logging import EpochLogger
-from mariha.utils.running import set_seed
 
 
-class PPO(BenchmarkAgent):
+class PPO(BaseAgent):
     """Proximal Policy Optimization for continual learning on MariHA.
 
-    After construction, call ``run()`` to begin training.
+    Per-rollout update style: collects ``rollout_length`` transitions
+    into a :class:`RolloutBuffer`, then runs ``n_epochs`` of clipped
+    minibatch updates over the rollout.  The shared training loop
+    drives the per-step interaction; PPO's algorithm-specific work
+    lives entirely inside :meth:`update_step`.
     """
+
+    update_granularity: str = "per_rollout"
 
     def __init__(
         self,
         env,
         logger: EpochLogger,
-        scene_ids: list,
+        scene_ids: List[str],
+        *,
         seed: int = 0,
+        # ---- PPO hyperparameters ----
         rollout_length: int = 512,
         n_epochs: int = 4,
         n_minibatches: int = 4,
@@ -61,86 +67,91 @@ class PPO(BenchmarkAgent):
         vf_coef: float = 1.0,
         ent_coef: float = 0.01,
         max_grad_norm: float = 0.5,
+        # ---- task-change behaviour ----
+        reset_optimizer_on_task_change: bool = False,
+        reset_network_on_task_change: bool = False,
+        # ---- architecture ----
+        hidden_size: int = 512,
+        hide_task_id: bool = False,
+        # ---- BaseAgent / logging ----
         log_every: int = 1000,
         save_freq_epochs: int = 25,
         render_every: int = 0,
-        reset_optimizer_on_task_change: bool = False,
-        reset_network_on_task_change: bool = False,
-        hidden_size: int = 512,
-        hide_task_id: bool = False,
         experiment_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
-        set_seed(seed, env=env)
+        super().__init__(
+            env=env,
+            logger=logger,
+            scene_ids=scene_ids,
+            agent_name="ppo",
+            seed=seed,
+            log_every=log_every,
+            save_freq_epochs=save_freq_epochs,
+            render_every=render_every,
+            experiment_dir=experiment_dir,
+            timestamp=timestamp,
+        )
 
-        self.env = env
-        self.scene_ids = scene_ids
-        self.num_tasks = len(scene_ids)
-        self.logger = logger
-        self.rollout_length = rollout_length
-        self.n_epochs = n_epochs
-        self.n_minibatches = n_minibatches
+        # ---- PPO hyperparameters ----
+        self.rollout_length = int(rollout_length)
+        self.n_epochs = int(n_epochs)
+        self.n_minibatches = int(n_minibatches)
         self.clip_ratio = clip_ratio
         self.gae_lambda = gae_lambda
         self.gamma = gamma
         self.vf_coef = vf_coef
         self.ent_coef = ent_coef
         self.max_grad_norm = max_grad_norm
-        self.log_every = log_every
-        self.save_freq_epochs = save_freq_epochs
-        self.render_every = render_every
+
         self.reset_optimizer_on_task_change = reset_optimizer_on_task_change
         self.reset_network_on_task_change = reset_network_on_task_change
-        self.experiment_dir = experiment_dir or Path("experiments")
-        self.timestamp = timestamp
 
-        self.obs_shape = env.observation_space.shape
-        self.act_dim = env.action_space.n
-        logger.log(f"Observation shape: {self.obs_shape}", color="blue")
-        logger.log(f"Action dim:        {self.act_dim}", color="blue")
-        logger.log(f"Num tasks:         {self.num_tasks}", color="blue")
+        self.hidden_size = int(hidden_size)
+        self.hide_task_id = hide_task_id
 
-        # Network
-        self.model = models.PPOActorCritic(
-            state_space=env.observation_space,
-            action_space=env.action_space,
-            num_tasks=self.num_tasks,
-            hidden_size=hidden_size,
-            hide_task_id=hide_task_id,
-        )
-
+        # ---- networks + optimizer + rollout buffer ----
+        self.model = models.PPOActorCritic(**self._policy_kwargs())
         self.optimizer = _keras.optimizers.legacy.Adam(learning_rate=lr)
 
-        # Rollout buffer
-        self.minibatch_size = rollout_length // n_minibatches
+        self.minibatch_size = self.rollout_length // self.n_minibatches
         self.rollout_buffer = RolloutBuffer(
             obs_shape=self.obs_shape,
-            size=rollout_length,
+            size=self.rollout_length,
             num_tasks=self.num_tasks,
-            gamma=gamma,
-            gae_lambda=gae_lambda,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
         )
 
-        self.start_time: float = 0.0
+        # Cached for the post-rollout bootstrap.  ``store_transition``
+        # updates these on every step so that ``update_step`` can
+        # compute V(_last_next_obs) for the GAE final term.
+        self._last_next_obs: Optional[np.ndarray] = None
+        self._last_one_hot: Optional[np.ndarray] = None
 
-    # ------------------------------------------------------------------
-    # Action selection
-    # ------------------------------------------------------------------
+        # Per-task compiled gradient step.  Recompiled in
+        # :meth:`on_task_change` so the embedded ``current_task_idx``
+        # is captured as a Python int constant — that lets the CL
+        # method's trace-time branches (e.g. "skip the penalty on
+        # task 0") bake into the per-task graph.
+        self._gradient_step_fn = self._make_gradient_step_fn(0)
 
-    def get_action(
-        self, obs: np.ndarray, task_one_hot: np.ndarray, deterministic: bool = False
-    ) -> int:
-        obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
-        one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
-        logits, _ = self.model(obs_t, one_hot_t)
-        if deterministic:
-            return int(tf.argmax(logits[0]).numpy())
-        probs = tf.nn.softmax(logits[0])
-        return int(tf.random.categorical(tf.math.log(probs[tf.newaxis]), 1)[0, 0].numpy())
+    # ==================================================================
+    # Algorithm internals
+    # ==================================================================
 
-    def get_action_with_info(
+    def _policy_kwargs(self) -> Dict[str, Any]:
+        return dict(
+            state_space=self.env.observation_space,
+            action_space=self.env.action_space,
+            num_tasks=self.num_tasks,
+            hidden_size=self.hidden_size,
+            hide_task_id=self.hide_task_id,
+        )
+
+    def _get_action_with_info(
         self, obs: np.ndarray, task_one_hot: np.ndarray
-    ) -> tuple:
+    ) -> Tuple[int, float, float]:
         """Return ``(action, log_prob, value)`` for rollout collection."""
         obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
         one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
@@ -151,336 +162,403 @@ class PPO(BenchmarkAgent):
         log_prob = float(tf.math.log(probs[action] + 1e-8).numpy())
         return action, log_prob, float(value[0, 0].numpy())
 
-    # ------------------------------------------------------------------
-    # PPO update
-    # ------------------------------------------------------------------
+    def _make_gradient_step_fn(self, current_task_idx: int):
+        """Build a per-task compiled minibatch gradient step.
 
-    @tf.function
-    def _update_step(self, obs, actions, returns, advantages, old_log_probs, one_hot):
-        """Single minibatch PPO gradient step."""
-        with tf.GradientTape() as tape:
-            logits, values = self.model(obs, one_hot)
-            values = tf.squeeze(values, axis=-1)
+        ``current_task_idx`` is captured in the closure as a Python
+        int.  This is the same per-task recompile pattern SAC uses for
+        ``learn_on_batch`` — it lets ``cl_method.compute_loss_penalty``
+        return ``tf.zeros([])`` on task 0 at trace time so the penalty
+        is fully optimized away from the first-task graph.
+        """
 
-            # New log probs
-            probs = tf.nn.softmax(logits)
-            log_probs_all = tf.math.log(probs + 1e-8)
-            new_log_probs = tf.reduce_sum(
-                log_probs_all * tf.one_hot(actions, self.act_dim), axis=-1
+        @tf.function
+        def gradient_step(
+            obs,
+            actions,
+            returns,
+            advantages,
+            old_log_probs,
+            one_hot,
+            episodic_batch=None,
+        ):
+            with tf.GradientTape() as tape:
+                logits, values = self.model(obs, one_hot)
+                values = tf.squeeze(values, axis=-1)
+
+                probs = tf.nn.softmax(logits)
+                log_probs_all = tf.math.log(probs + 1e-8)
+                new_log_probs = tf.reduce_sum(
+                    log_probs_all * tf.one_hot(actions, self.act_dim),
+                    axis=-1,
+                )
+
+                ratio = tf.exp(new_log_probs - old_log_probs)
+                clipped_ratio = tf.clip_by_value(
+                    ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio
+                )
+                actor_loss = -tf.reduce_mean(
+                    tf.minimum(ratio * advantages, clipped_ratio * advantages)
+                )
+
+                critic_loss = tf.reduce_mean(
+                    tf.keras.losses.huber(returns, values, delta=1.0)
+                )
+
+                entropy = -tf.reduce_sum(probs * log_probs_all, axis=-1)
+                entropy_loss = -tf.reduce_mean(entropy)
+
+                total_loss = (
+                    actor_loss
+                    + self.vf_coef * critic_loss
+                    + self.ent_coef * entropy_loss
+                )
+
+                # CL regularization (e.g. EWC quadratic anchor).
+                # ``compute_loss_penalty`` returns ``tf.zeros([])`` on
+                # the first task, evaluated at trace time.
+                if self.cl_method is not None:
+                    total_loss = (
+                        total_loss
+                        + self.cl_method.compute_loss_penalty(
+                            self, task_idx=current_task_idx
+                        )
+                    )
+
+            grads = tape.gradient(total_loss, self.model.trainable_variables)
+
+            # Hand the gradients to the CL method for in-place adjustment
+            # (AGEM projection, PackNet masking, DER additive distillation
+            # term, ...).  The single-key view matches PPO's optimizer
+            # view exactly.
+            grads_by_group: Dict[str, List[Optional[tf.Tensor]]] = {
+                "policy": list(grads)
+            }
+            if self.cl_method is not None:
+                grads_by_group = self.cl_method.adjust_gradients(
+                    self,
+                    grads_by_group,
+                    task_idx=current_task_idx,
+                    episodic_batch=episodic_batch,
+                )
+            grads = grads_by_group["policy"]
+
+            grads, _ = tf.clip_by_global_norm(grads, self.max_grad_norm)
+            # Refresh so ``after_gradient_step`` sees the gradients
+            # actually applied (post-clip).
+            grads_by_group = {"policy": list(grads)}
+
+            self.optimizer.apply_gradients(
+                zip(grads, self.model.trainable_variables)
             )
 
-            # PPO clipped objective
-            ratio = tf.exp(new_log_probs - old_log_probs)
-            clipped_ratio = tf.clip_by_value(
-                ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio
-            )
-            actor_loss = -tf.reduce_mean(
-                tf.minimum(ratio * advantages, clipped_ratio * advantages)
+            metrics = dict(
+                actor_loss=actor_loss,
+                critic_loss=critic_loss,
+                entropy=tf.reduce_mean(entropy),
+                total_loss=total_loss,
             )
 
-            # Critic loss (Huber / smooth L1)
-            critic_loss = tf.reduce_mean(
-                tf.keras.losses.huber(returns, values, delta=1.0)
+            if self.cl_method is not None:
+                self.cl_method.after_gradient_step(
+                    self,
+                    grads_by_group,
+                    task_idx=current_task_idx,
+                    metrics=metrics,
+                )
+
+            return metrics
+
+        return gradient_step
+
+    def _do_minibatch_updates(self, current_task_idx: int) -> Dict[str, float]:
+        """Run ``n_epochs`` of minibatch updates over the current rollout."""
+        metrics: Dict[str, float] = {}
+        episodic_batch = (
+            self.cl_method.get_episodic_batch(
+                self, task_idx=current_task_idx
             )
-
-            # Entropy bonus
-            entropy = -tf.reduce_sum(probs * log_probs_all, axis=-1)
-            entropy_loss = -tf.reduce_mean(entropy)
-
-            total_loss = (
-                actor_loss + self.vf_coef * critic_loss + self.ent_coef * entropy_loss
-            )
-
-        grads = tape.gradient(total_loss, self.model.trainable_variables)
-        grads, _ = tf.clip_by_global_norm(grads, self.max_grad_norm)
-        self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
-        return dict(
-            actor_loss=actor_loss,
-            critic_loss=critic_loss,
-            entropy=tf.reduce_mean(entropy),
-            total_loss=total_loss,
+            if self.cl_method is not None
+            else None
         )
-
-    def update(self) -> Dict:
-        """Run ``n_epochs`` of minibatch updates on the current rollout."""
-        metrics: Dict = {}
         for _ in range(self.n_epochs):
             for batch in self.rollout_buffer.get_batches(self.minibatch_size):
-                results = self._update_step(
+                results = self._gradient_step_fn(
                     batch["obs"],
                     batch["actions"],
                     batch["returns"],
                     batch["advantages"],
                     batch["old_log_probs"],
                     batch["one_hot"],
+                    episodic_batch,
                 )
                 metrics = {k: float(v) for k, v in results.items()}
         return metrics
 
-    # ------------------------------------------------------------------
-    # Main training loop
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Agent-agnostic CL contract (Phase 4)
+    # ==================================================================
 
-    def run(self) -> None:
-        """Run the full episode-driven PPO training loop."""
-        self.start_time = time.time()
+    def get_named_parameter_groups(self) -> Dict[str, List[tf.Variable]]:
+        """Named parameter groups for agent-agnostic CL methods.
 
-        try:
-            obs, info = self.env.reset()
-        except StopIteration:
-            self.logger.log("Curriculum is empty — nothing to train.", color="red")
+        PPO is a single shared-trunk actor-critic — backbone, actor
+        head, and critic head are all updated by one optimizer step
+        over ``model.trainable_variables``.  We expose a single
+        ``"policy"`` group so :meth:`_gradient_step` can pass a
+        non-overlapping ``grads_by_group`` view to
+        ``cl_method.adjust_gradients`` that exactly matches the
+        optimizer's view.
+
+        ``ParameterRegularizer`` defaults to selecting ``"policy"`` (its
+        default search order is ``actor → policy → q``), which anchors
+        the entire actor-critic network — the right semantics for
+        "preserve the old policy" since a clamp on the actor head alone
+        would let the shared trunk drift freely.
+        """
+        return {"policy": list(self.model.trainable_variables)}
+
+    def forward_for_importance(
+        self, obs: tf.Tensor, one_hot: tf.Tensor
+    ) -> Dict[str, tf.Tensor]:
+        """Differentiable forward output per parameter group.
+
+        Returns the policy logits for the ``"policy"`` group.  EWC and
+        MAS take the Jacobian of these logits w.r.t. every parameter
+        in ``model.trainable_variables`` — including the shared
+        backbone, since logits flow through it.  Note that the value
+        head's contribution to backbone importance is not measured;
+        we treat the actor's gradient sensitivity as the canonical
+        proxy for "the policy's reliance on each parameter".
+        """
+        logits, _ = self.model(obs, one_hot)
+        return {"policy": logits}
+
+    def distill_targets(
+        self, obs: tf.Tensor, one_hot: tf.Tensor
+    ) -> Dict[str, tf.Tensor]:
+        """Distillation targets for DER/ClonEx-style CL methods.
+
+        PPO distils both the policy logits (``actor_logits``) and the
+        scalar value estimate (``value``).  ``DistillationMethod``
+        dispatches on the keys: DER consumes only ``actor_logits``;
+        ClonEx additionally consumes ``value``.
+        """
+        logits, value = self.model(obs, one_hot)
+        return {
+            "actor_logits": logits,
+            "value": tf.squeeze(value, axis=-1),
+        }
+
+    def _compute_reference_loss(
+        self, batch: Dict[str, tf.Tensor]
+    ) -> Dict[str, tf.Tensor]:
+        """PPO reference loss on raw transitions for AGEM-style projection.
+
+        AGEM stores raw transitions ``(obs, action, reward, next_obs,
+        done, one_hot)`` from past tasks, but PPO's standard loss
+        needs ``returns`` and ``advantages`` from a rollout it owns.
+        For the reference-gradient pass we fall back to the simplest
+        meaningful objective: the negative log-likelihood of the
+        stored actions under the *current* policy — i.e., a behaviour-
+        cloning loss on past trajectories.
+
+        Projecting the current PPO update onto the half-space defined
+        by this loss keeps the policy from forgetting how to produce
+        the actions it took on previous tasks, which is the spirit of
+        AGEM applied to on-policy methods (Rolnick et al. 2019,
+        *Experience Replay for Continual Learning*).
+        """
+        obs = batch["obs"]
+        actions = batch["actions"]
+        one_hot = batch["one_hot"]
+
+        logits, _ = self.model(obs, one_hot)
+        log_probs_all = tf.nn.log_softmax(logits)
+        action_log_probs = tf.reduce_sum(
+            log_probs_all * tf.one_hot(actions, self.act_dim), axis=-1
+        )
+        bc_loss = -tf.reduce_mean(action_log_probs)
+        return {"policy": bc_loss}
+
+    # ==================================================================
+    # BenchmarkAgent contract
+    # ==================================================================
+
+    def get_action(
+        self,
+        obs: np.ndarray,
+        task_one_hot: np.ndarray,
+        deterministic: bool = False,
+    ) -> int:
+        obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
+        one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
+        logits, _ = self.model(obs_t, one_hot_t)
+        if deterministic:
+            return int(tf.argmax(logits[0]).numpy())
+        probs = tf.nn.softmax(logits[0])
+        return int(
+            tf.random.categorical(tf.math.log(probs[tf.newaxis]), 1)[0, 0].numpy()
+        )
+
+    # ==================================================================
+    # Required BaseAgent callbacks
+    # ==================================================================
+
+    def select_action(
+        self,
+        *,
+        obs: np.ndarray,
+        one_hot: np.ndarray,
+        global_step: int,
+        task_step: int,
+        current_task_idx: int,
+    ) -> Tuple[int, Dict[str, Any]]:
+        action, log_prob, value = self._get_action_with_info(obs, one_hot)
+        return action, {"log_prob": log_prob, "value": value}
+
+    def store_transition(
+        self,
+        *,
+        obs: np.ndarray,
+        action: int,
+        reward: float,
+        next_obs: np.ndarray,
+        terminated: bool,
+        truncated: bool,
+        one_hot: np.ndarray,
+        scene_id: str,
+        info: Dict[str, Any],
+        extras: Dict[str, Any],
+    ) -> None:
+        done = terminated or truncated
+        self.rollout_buffer.store(
+            obs,
+            action,
+            reward,
+            done,
+            extras["value"],
+            extras["log_prob"],
+            one_hot,
+        )
+        # Cache the post-step state for the bootstrap.  These get
+        # overwritten on every store_transition; by the time
+        # ``update_step`` runs (immediately after the rollout buffer
+        # fills) they hold the next-state of the very last step.
+        self._last_next_obs = next_obs
+        self._last_one_hot = one_hot
+
+    def should_update(self, global_step: int) -> bool:
+        return self.rollout_buffer.ptr >= self.rollout_length
+
+    def update_step(
+        self, *, global_step: int, current_task_idx: int
+    ) -> None:
+        if self.rollout_buffer.ptr == 0:
             return
 
-        one_hot_vec = info["task_one_hot"]
-        current_scene_id = info.get("scene_id", "")
-        current_task_idx = (
-            self.scene_ids.index(current_scene_id)
-            if current_scene_id in self.scene_ids
-            else 0
+        # Bootstrap V(s_T) for the GAE final term.  Note that this uses
+        # the model's value estimate even on terminated transitions —
+        # consistent with the legacy PPO loop and tolerated because the
+        # bias is small relative to the GAE residual.
+        obs_t = tf.expand_dims(
+            tf.cast(self._last_next_obs, tf.float32), 0
         )
-        self.on_task_start(current_task_idx, current_scene_id)
+        one_hot_t = tf.expand_dims(
+            tf.cast(self._last_one_hot, tf.float32), 0
+        )
+        _, last_value = self.model(obs_t, one_hot_t)
+        self.rollout_buffer.compute_returns_and_advantages(
+            float(last_value[0, 0].numpy())
+        )
 
-        episodes = 0
-        episode_return = 0.0
-        episode_len = 0
-        global_timestep = 0
-        action_counts = {i: 0 for i in range(self.act_dim)}
-        curriculum_done = False
-
-        self.logger.log("PPO training started.", color="green")
-
-        while not curriculum_done:
-            # ---- collect rollout ----
-            self.rollout_buffer.reset()
-            for _ in range(self.rollout_length):
-                action, log_prob, value = self.get_action_with_info(obs, one_hot_vec)
-                next_obs, reward, terminated, truncated, info = self.env.step(action)
-                done = terminated or truncated
-                episode_return += reward
-                episode_len += 1
-                action_counts[action] += 1
-
-                self.rollout_buffer.store(
-                    obs, action, reward, done, value, log_prob, one_hot_vec
-                )
-                obs = next_obs
-
-                if done:
-                    episodes += 1
-                    self.logger.log(
-                        f"Ep {episodes:5d} | return={episode_return:7.2f} | "
-                        f"len={episode_len:4d}"
-                    )
-                    self.logger.store(
-                        {
-                            "train/return": episode_return,
-                            "train/ep_length": episode_len,
-                            "train/episodes": episodes,
-                        }
-                    )
-                    episode_return = 0.0
-                    episode_len = 0
-
-                    if self.render_every > 0 and episodes % self.render_every == 0:
-                        self.env.render_checkpoint(self.get_action)
-
-                    if self.env.is_done:
-                        curriculum_done = True
-                        break
-
-                    try:
-                        obs, info = self.env.reset()
-                    except StopIteration:
-                        curriculum_done = True
-                        break
-
-                    one_hot_vec = info["task_one_hot"]
-                    new_scene_id = info.get("scene_id", "")
-
-                    if info.get("task_switch", False):
-                        self.on_task_end(current_task_idx)
-                        new_task_idx = (
-                            self.scene_ids.index(new_scene_id)
-                            if new_scene_id in self.scene_ids
-                            else current_task_idx
-                        )
-                        if self.reset_optimizer_on_task_change:
-                            from mariha.utils.running import reset_optimizer
-                            reset_optimizer(self.optimizer)
-                        if self.reset_network_on_task_change:
-                            from mariha.utils.running import reset_weights
-                            reset_weights(
-                                self.model, models.PPOActorCritic,
-                                dict(
-                                    state_space=self.env.observation_space,
-                                    action_space=self.env.action_space,
-                                    num_tasks=self.num_tasks,
-                                ),
-                            )
-                        self.on_task_start(new_task_idx, new_scene_id)
-                        current_task_idx = new_task_idx
-                        current_scene_id = new_scene_id
-
-                global_timestep += 1
-
-            # ---- compute returns and advantages ----
-            if self.rollout_buffer.ptr > 0:
-                # Bootstrap value for the last observation.
-                obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
-                one_hot_t = tf.expand_dims(tf.cast(one_hot_vec, tf.float32), 0)
-                _, last_value = self.model(obs_t, one_hot_t)
-                last_val = float(last_value[0, 0].numpy())
-                self.rollout_buffer.compute_returns_and_advantages(last_val)
-
-                # ---- policy update ----
-                t_update = time.time()
-                metrics = self.update()
-                self.logger.log(
-                    f"PPO update | step {global_timestep} | "
-                    f"loss={metrics.get('total_loss', 0):.4f} | "
-                    f"{time.time() - t_update:.2f}s"
-                )
-                self.logger.store(
-                    {
-                        "train/loss_actor": metrics.get("actor_loss", 0),
-                        "train/loss_critic": metrics.get("critic_loss", 0),
-                        "train/entropy": metrics.get("entropy", 0),
-                    }
-                )
-
-            # ---- periodic logging and checkpointing ----
-            if (global_timestep + 1) % self.log_every == 0:
-                epoch = (global_timestep + 1) // self.log_every
-                if epoch % self.save_freq_epochs == 0:
-                    self.save_model(current_task_idx)
-                self._log_after_epoch(epoch, global_timestep, action_counts)
-                action_counts = {i: 0 for i in range(self.act_dim)}
-
-        # ---- training complete ----
-        self.on_task_end(current_task_idx)
-        self.save_model(current_task_idx)
+        t_update = time.time()
+        metrics = self._do_minibatch_updates(current_task_idx)
         self.logger.log(
-            f"PPO training complete — {global_timestep} steps, {episodes} episodes.",
-            color="green",
+            f"PPO update | step {global_step} | "
+            f"loss={metrics.get('total_loss', 0):.4f} | "
+            f"{time.time() - t_update:.2f}s"
+        )
+        self.logger.store(
+            {
+                "train/loss_actor": metrics.get("actor_loss", 0.0),
+                "train/loss_critic": metrics.get("critic_loss", 0.0),
+                "train/entropy": metrics.get("entropy", 0.0),
+            }
         )
 
-    # ------------------------------------------------------------------
+        self.rollout_buffer.reset()
+
+    def save_weights(self, directory: Path) -> None:
+        directory = Path(directory)
+        self.model.save_weights(str(directory / "ppo_actor_critic"))
+
+    def load_weights(self, directory: Path) -> None:
+        directory = Path(directory)
+        self.model.load_weights(str(directory / "ppo_actor_critic"))
+
+    # ==================================================================
+    # Optional BaseAgent hooks
+    # ==================================================================
+
+    def on_task_start(
+        self, current_task_idx: int, scene_id: str = ""
+    ) -> None:
+        """PPO's task-start log line + forward to attached CL method."""
+        _scene = scene_id or (
+            self.scene_ids[current_task_idx]
+            if current_task_idx < len(self.scene_ids)
+            else "?"
+        )
+        self.logger.log(
+            f"Task start: idx={current_task_idx}  scene={_scene}",
+            color="white",
+        )
+        super().on_task_start(current_task_idx, _scene)
+
+    def on_task_end(self, current_task_idx: int) -> None:
+        """PPO's task-end log line + forward to attached CL method."""
+        self.logger.log(f"Task end:   idx={current_task_idx}", color="white")
+        super().on_task_end(current_task_idx)
+
+    def on_task_change(self, new_task_idx: int, new_scene_id: str) -> None:
+        if self.reset_optimizer_on_task_change:
+            from mariha.utils.running import reset_optimizer
+
+            reset_optimizer(self.optimizer)
+        if self.reset_network_on_task_change:
+            from mariha.utils.running import reset_weights
+
+            reset_weights(
+                self.model, models.PPOActorCritic, self._policy_kwargs()
+            )
+
+        # Recompile so the embedded ``current_task_idx`` constant
+        # matches the new task — see ``_make_gradient_step_fn``.
+        self._gradient_step_fn = self._make_gradient_step_fn(new_task_idx)
+
+    def get_log_tabular_keys(self) -> List[Tuple[str, Dict[str, Any]]]:
+        return [
+            ("train/loss_actor", {"average_only": True}),
+            ("train/loss_critic", {"average_only": True}),
+            ("train/entropy", {"average_only": True}),
+        ]
+
+    # ==================================================================
     # Burn-in
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def burn_in(self, burn_in_spec, num_steps: int) -> None:
-        """Pre-train on a single scene using PPO rollouts.
+        run_burn_in(self, burn_in_spec, num_steps)
 
-        Collects rollouts on the burn-in scene and runs PPO updates.  After
-        completion the rollout buffer is reset.
-
-        Args:
-            burn_in_spec: ``EpisodeSpec`` for the burn-in scene.
-            num_steps: Total environment steps to collect.
-        """
-        from mariha.env.continual import make_scene_env
-        from mariha.env.scenario_gen import load_metadata
-        from mariha.env.base import SCENARIOS_DIR
-
-        scene_id = burn_in_spec.scene_id
-        self.logger.log(
-            f"[burn-in] PPO burn-in on '{scene_id}' for {num_steps} steps.",
-            color="cyan",
-        )
-
-        scene_meta = load_metadata(SCENARIOS_DIR)
-        exit_point = scene_meta[scene_id]["exit_point"]
-        burn_env = make_scene_env(
-            scene_id=scene_id,
-            exit_point=exit_point,
-            scene_ids=self.scene_ids,
-            render_mode=None,
-        )
-
-        obs, info = burn_env.reset(episode_spec=burn_in_spec)
-        one_hot_vec = info["task_one_hot"]
-        step = 0
-        episodes = 0
-        t_start = time.time()
-
-        while step < num_steps:
-            self.rollout_buffer.reset()
-            steps_this_rollout = min(self.rollout_length, num_steps - step)
-            for _ in range(steps_this_rollout):
-                action, log_prob, value = self.get_action_with_info(obs, one_hot_vec)
-                next_obs, reward, terminated, truncated, _info = burn_env.step(action)
-                done = terminated or truncated
-                self.rollout_buffer.store(
-                    obs, action, reward, done, value, log_prob, one_hot_vec
-                )
-                obs = next_obs
-                step += 1
-
-                if done:
-                    episodes += 1
-                    obs, info = burn_env.reset(episode_spec=burn_in_spec)
-                    one_hot_vec = info["task_one_hot"]
-
-            if self.rollout_buffer.ptr > 0:
-                obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
-                one_hot_t = tf.expand_dims(tf.cast(one_hot_vec, tf.float32), 0)
-                _, last_value = self.model(obs_t, one_hot_t)
-                self.rollout_buffer.compute_returns_and_advantages(
-                    float(last_value[0, 0].numpy())
-                )
-                self.update()
-
-        burn_env.close()
+    def on_burn_in_end(self) -> None:
+        """Reset the rollout buffer after burn-in."""
         self.rollout_buffer.reset()
-        self.logger.log(
-            f"[burn-in] Complete — {step} steps, {episodes} episodes "
-            f"in {time.time() - t_start:.1f}s.",
-            color="cyan",
-        )
+        self.logger.log("[burn-in] PPO: rollout buffer reset.", color="cyan")
 
-    # ------------------------------------------------------------------
-    # Logging
-    # ------------------------------------------------------------------
-
-    def _log_after_epoch(
-        self, epoch: int, global_timestep: int, action_counts: Dict
-    ) -> None:
-        self.logger.log_tabular("epoch", epoch)
-        self.logger.log_tabular("total_env_steps", global_timestep + 1)
-        self.logger.log_tabular("train/return", with_min_and_max=True)
-        self.logger.log_tabular("train/ep_length", average_only=True)
-        self.logger.log_tabular("train/episodes", average_only=True)
-        self.logger.log_tabular("train/loss_actor", average_only=True)
-        self.logger.log_tabular("train/loss_critic", average_only=True)
-        self.logger.log_tabular("train/entropy", average_only=True)
-        for i, count in action_counts.items():
-            self.logger.log_tabular(f"train/actions/{i}", count)
-        self.logger.log_tabular("walltime", time.time() - self.start_time)
-        self.logger.dump_tabular()
-
-    # ------------------------------------------------------------------
-    # Checkpointing
-    # ------------------------------------------------------------------
-
-    def save_model(self, current_task_idx: int) -> None:
-        ts = self.timestamp or ""
-        model_dir = str(
-            self.experiment_dir / "checkpoints" / "ppo" / f"{ts}_task{current_task_idx}"
-        )
-        self.logger.log(f"Saving PPO model to {model_dir}", color="crimson")
-        os.makedirs(model_dir, exist_ok=True)
-        self.model.save_weights(os.path.join(model_dir, "ppo_actor_critic"))
-
-    def save_checkpoint(self, directory: Path) -> None:
-        os.makedirs(str(directory), exist_ok=True)
-        self.model.save_weights(os.path.join(str(directory), "ppo_actor_critic"))
-
-    def load_checkpoint(self, directory: Path) -> None:
-        self.model.load_weights(os.path.join(str(directory), "ppo_actor_critic"))
-
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Config interface
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     @classmethod
     def add_args(cls, parser: argparse.ArgumentParser) -> None:
@@ -499,23 +577,32 @@ class PPO(BenchmarkAgent):
         parser.add_argument("--hidden_size", type=int, default=512)
         parser.add_argument("--hide_task_id", type=str2bool, default=False)
         parser.add_argument(
-            "--reset_optimizer_on_task_change", type=str2bool, default=False,
+            "--reset_optimizer_on_task_change", type=str2bool, default=False
         )
         parser.add_argument(
-            "--reset_network_on_task_change", type=str2bool, default=False,
+            "--reset_network_on_task_change", type=str2bool, default=False
         )
         parser.add_argument("--log_every", type=int, default=1000)
         parser.add_argument("--save_freq_epochs", type=int, default=25)
         parser.add_argument(
-            "--render_every", type=int, default=0,
+            "--render_every",
+            type=int,
+            default=0,
             help="Play a greedy episode every N training episodes (0=disabled).",
         )
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace, env, logger, scene_ids: list) -> "PPO":
+    def from_args(
+        cls, args: argparse.Namespace, env, logger, scene_ids: list
+    ) -> "PPO":
         from mariha.utils.running import get_readable_timestamp
 
         experiment_dir = Path(getattr(args, "experiment_dir", "experiments"))
+        # Prefer the seeded timestamp the benchmark context already composed
+        # so the checkpoint dir leaf shares its prefix with the run dir leaf.
+        timestamp = getattr(args, "run_timestamp", None) or (
+            f"{get_readable_timestamp()}_seed{getattr(args, 'seed', 0)}"
+        )
         return cls(
             env=env,
             logger=logger,
@@ -534,10 +621,14 @@ class PPO(BenchmarkAgent):
             log_every=getattr(args, "log_every", 1000),
             save_freq_epochs=getattr(args, "save_freq_epochs", 25),
             render_every=getattr(args, "render_every", 0),
-            reset_optimizer_on_task_change=getattr(args, "reset_optimizer_on_task_change", False),
-            reset_network_on_task_change=getattr(args, "reset_network_on_task_change", False),
+            reset_optimizer_on_task_change=getattr(
+                args, "reset_optimizer_on_task_change", False
+            ),
+            reset_network_on_task_change=getattr(
+                args, "reset_network_on_task_change", False
+            ),
             hidden_size=getattr(args, "hidden_size", 512),
             hide_task_id=getattr(args, "hide_task_id", False),
             experiment_dir=experiment_dir,
-            timestamp=get_readable_timestamp(),
+            timestamp=timestamp,
         )

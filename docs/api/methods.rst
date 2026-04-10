@@ -1,18 +1,51 @@
 mariha.methods
 ==============
 
-Twelve continual learning baseline implementations, all extending
-:class:`~mariha.rl.sac.SAC` through its five hook methods.
+Nine continual learning baseline implementations, all built on the
+:class:`~mariha.methods.base.CLMethod` ABC.  CL methods are *composed*
+onto agents after construction (``agent.cl_method = ...``) rather than
+inheriting from a specific RL algorithm — every method works on
+:class:`~mariha.rl.sac.SAC`, :class:`~mariha.rl.ppo.PPO`, and
+:class:`~mariha.rl.dqn.DQN` through the agent-agnostic hooks
+:meth:`~mariha.rl.base.BaseAgent.get_named_parameter_groups`,
+:meth:`~mariha.rl.base.BaseAgent.forward_for_importance`, and
+:meth:`~mariha.rl.base.BaseAgent.distill_targets`.
 
 .. seealso:: :doc:`/cl_methods` — grouped conceptual overview with math and references.
 
-mariha.methods.regularization
-------------------------------
+mariha.methods.base
+-------------------
 
-Base class for parameter-regularisation methods (L2, EWC, MAS, SI, OWL).
-Maintains a parameter snapshot and per-parameter importance weights.
+The :class:`~mariha.methods.base.CLMethod` ABC defining the hook surface
+that every concrete method overrides.
 
-.. automodule:: mariha.methods.regularization
+.. automodule:: mariha.methods.base
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mariha.methods.regularizer_base
+-------------------------------
+
+Shared bookkeeping for parameter-regularization methods (L2, EWC, MAS,
+SI).  Maintains the ``θ*`` snapshots and per-parameter importance
+weights so concrete subclasses only have to implement
+``_compute_importance``.
+
+.. automodule:: mariha.methods.regularizer_base
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mariha.methods.distillation_base
+--------------------------------
+
+Shared episodic-memory + distillation gradient injection for DER and
+ClonEx.  Dispatches to softmax KL on actor logits (SAC/PPO), soft KL
+with temperature on Q-values (DQN — Rusu et al. 2016), and MSE on
+critic / value heads (ClonEx).
+
+.. automodule:: mariha.methods.distillation_base
    :members:
    :undoc-members:
    :show-inheritance:
@@ -49,14 +82,6 @@ mariha.methods.si
    :undoc-members:
    :show-inheritance:
 
-mariha.methods.owl
-------------------
-
-.. automodule:: mariha.methods.owl
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 mariha.methods.agem
 -------------------
 
@@ -69,14 +94,6 @@ mariha.methods.packnet
 -----------------------
 
 .. automodule:: mariha.methods.packnet
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-mariha.methods.vcl
-------------------
-
-.. automodule:: mariha.methods.vcl
    :members:
    :undoc-members:
    :show-inheritance:

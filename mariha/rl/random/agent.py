@@ -89,8 +89,12 @@ class RandomAgent(BenchmarkAgent):
 
             if terminated or truncated:
                 episodes += 1
-                self.logger.log(
-                    f"Ep {episodes:5d} | return={episode_return:7.2f} | len={episode_len:4d}"
+                self.logger.store(
+                    {
+                        "train/return": episode_return,
+                        "train/ep_length": episode_len,
+                        "train/episodes": episodes,
+                    }
                 )
                 episode_return = 0.0
                 episode_len = 0
@@ -147,13 +151,18 @@ class RandomAgent(BenchmarkAgent):
     @classmethod
     def from_args(cls, args, env, logger, scene_ids) -> "RandomAgent":
         from mariha.utils.running import get_readable_timestamp
+        # Prefer the seeded timestamp the benchmark context already composed
+        # so the checkpoint dir leaf shares its prefix with the run dir leaf.
+        timestamp = getattr(args, "run_timestamp", None) or (
+            f"{get_readable_timestamp()}_seed{getattr(args, 'seed', 0)}"
+        )
         return cls(
             env=env,
             logger=logger,
             scene_ids=scene_ids,
             seed=getattr(args, "seed", 0),
             experiment_dir=Path(getattr(args, "experiment_dir", "experiments")),
-            timestamp=get_readable_timestamp(),
+            timestamp=timestamp,
         )
 
     # ------------------------------------------------------------------
