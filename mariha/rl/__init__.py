@@ -1,12 +1,12 @@
-"""Built-in algorithm registry for MariHA.
+"""Built-in agent registry for MariHA.
 
-Importing this module registers all built-in algorithms (SAC, PPO, DQN,
+Importing this module registers all built-in agents (SAC, PPO, DQN,
 SAC-based CL variants, and RandomAgent) in ``mariha.benchmark.registry``.
 
-Any script that needs to look up an algorithm by name should import this
+Any script that needs to look up an agent by name should import this
 module first::
 
-    import mariha.rl  # registers all built-in algorithms
+    import mariha.rl  # registers all built-in agents
     from mariha.benchmark.registry import get_agent_class
     agent_cls = get_agent_class("ppo")
 """

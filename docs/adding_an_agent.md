@@ -1,14 +1,14 @@
-# Adding a New Algorithm to MariHA
+# Adding a New Agent to MariHA
 
-This guide explains how to implement a new RL algorithm and run it against
+This guide explains how to implement a new RL agent and run it against
 the full MariHA benchmark — the same curriculum, CL metrics, and behavioral
-metrics used by all built-in algorithms (SAC, DDQN, PPO, MuZero, …).
+metrics used by all built-in agents (SAC, DDQN, PPO, MuZero, …).
 
 ---
 
 ## What the benchmark provides
 
-When your algorithm runs, the benchmark supplies:
+When your agent runs, the benchmark supplies:
 
 | What | Where | Notes |
 |---|---|---|
@@ -18,7 +18,7 @@ When your algorithm runs, the benchmark supplies:
 | Current scene ID | `info["scene_id"]` | e.g. `"w1l1s0"` |
 | Structured logger | `EpochLogger` | TSV / TensorBoard / WandB |
 | Canonical scene list | `scene_ids: list[str]` | Defines one-hot dimension and task index |
-| Replay buffer implementations | `mariha.replay.buffers` | Optional — use if your algorithm is off-policy |
+| Replay buffer implementations | `mariha.replay.buffers` | Optional — use if your agent is off-policy |
 
 The environment exposes a standard Gymnasium interface:
 `reset() → (obs, info)` and `step(action) → (obs, reward, terminated, truncated, info)`.
@@ -46,10 +46,10 @@ Subclass `BenchmarkAgent` from `mariha.benchmark.agent` and implement:
 
 ## Step-by-step
 
-### 1. Create your algorithm file
+### 1. Create your agent file
 
 ```
-mariha/rl/myalgo/
+mariha/rl/myagent/
     __init__.py      ← empty
     agent.py         ← your implementation
 ```
@@ -59,29 +59,29 @@ mariha/rl/myalgo/
 Open `mariha/rl/__init__.py` and add two lines:
 
 ```python
-from mariha.rl.myalgo.agent import MyAlgo
-register("myalgo")(MyAlgo)
+from mariha.rl.myagent.agent import MyAgent
+register("myagent")(MyAgent)
 ```
 
 ### 3. Run training
 
 ```bash
-mariha-run-cl --algorithm myalgo --subject sub-01 --seed 0
+mariha-run-cl --agent myagent --subject sub-01 --seed 0
 ```
 
 Pass your own hyperparameter flags if you defined them in `add_args`:
 
 ```bash
-mariha-run-cl --algorithm myalgo --subject sub-01 --my_lr 1e-4 --my_param 42
+mariha-run-cl --agent myagent --subject sub-01 --my_lr 1e-4 --my_param 42
 ```
 
 ### 4. Run evaluation
 
 ```bash
-mariha-evaluate --algorithm myalgo --subject sub-01 --run_prefix <timestamp_seed0>
+mariha-evaluate --agent myagent --subject sub-01 --run_prefix <timestamp_seed0>
 ```
 
-This produces `experiments/sub-01/myalgo/<run_prefix>/eval_results.json` with
+This produces `experiments/sub-01/myagent/<run_prefix>/eval_results.json` with
 AP, BWT, forgetting, plasticity, and per-scene behavioral metrics.
 
 ---
@@ -175,7 +175,7 @@ class RandomAgent(BenchmarkAgent):
     def save_checkpoint(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "agent.json").write_text(
-            json.dumps({"algorithm": "random", "n_actions": self.n_actions})
+            json.dumps({"agent": "random", "n_actions": self.n_actions})
         )
 
     def load_checkpoint(self, directory: Path) -> None:
@@ -211,8 +211,8 @@ register("random")(RandomAgent)
 Run it:
 
 ```bash
-mariha-run-cl --algorithm random --subject sub-01 --seed 0
-mariha-evaluate --algorithm random --subject sub-01 --run_prefix <timestamp>
+mariha-run-cl --agent random --subject sub-01 --seed 0
+mariha-evaluate --agent random --subject sub-01 --run_prefix <timestamp>
 ```
 
 ---
@@ -243,7 +243,7 @@ self.save_checkpoint(self._checkpoint_dir(task_idx))
 
 The directory naming convention that `mariha-evaluate` expects is:
 ```
-experiments/checkpoints/<algorithm>/<timestamp>_task<k>/
+experiments/checkpoints/<agent>/<timestamp>_task<k>/
 ```
 
 The files *inside* that directory are yours to choose.
@@ -282,7 +282,7 @@ per-task parameters, or ignore it entirely for task-agnostic methods.
 {
   "metadata": {
     "subject": "sub-01",
-    "algorithm": "myalgo",
+    "agent": "myagent",
     "run_prefix": "...",
     "n_episodes": 5,
     "n_scenes": 42,
@@ -310,9 +310,9 @@ With `--eval_diagonal`, `cl_metrics` also includes `BWT`, `forgetting`, and
 
 ## Summary checklist
 
-- [ ] Create `mariha/rl/myalgo/__init__.py` (empty)
-- [ ] Create `mariha/rl/myalgo/agent.py` implementing `BenchmarkAgent`
+- [ ] Create `mariha/rl/myagent/__init__.py` (empty)
+- [ ] Create `mariha/rl/myagent/agent.py` implementing `BenchmarkAgent`
 - [ ] Implement `get_action`, `run`, `save_checkpoint`, `load_checkpoint`, `from_args`
-- [ ] Add `register("myalgo")(MyAlgo)` to `mariha/rl/__init__.py`
-- [ ] Test: `mariha-run-cl --algorithm myalgo --subject sub-01 --seed 0`
-- [ ] Evaluate: `mariha-evaluate --algorithm myalgo --subject sub-01 --run_prefix <ts>`
+- [ ] Add `register("myagent")(MyAgent)` to `mariha/rl/__init__.py`
+- [ ] Test: `mariha-run-cl --agent myagent --subject sub-01 --seed 0`
+- [ ] Evaluate: `mariha-evaluate --agent myagent --subject sub-01 --run_prefix <ts>`

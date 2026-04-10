@@ -1,19 +1,19 @@
-"""Algorithm registry for the MariHA benchmark.
+"""Agent registry for the MariHA benchmark.
 
-All built-in algorithms are registered in ``mariha/rl/__init__.py``.
-New algorithms register themselves with the ``@register`` decorator or by
+All built-in agents are registered in ``mariha/rl/__init__.py``.
+New agents register themselves with the ``@register`` decorator or by
 calling ``register(name)(cls)`` directly.
 
 Usage::
 
     from mariha.benchmark.registry import register, get_agent_class
 
-    @register("my_algo")
-    class MyAlgo(BenchmarkAgent):
+    @register("my_agent")
+    class MyAgent(BenchmarkAgent):
         ...
 
     # Later:
-    agent_cls = get_agent_class("my_algo")
+    agent_cls = get_agent_class("my_agent")
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ _REGISTRY: dict[str, type] = {}
 
 
 def register(name: str):
-    """Decorator that registers an algorithm class under ``name``.
+    """Decorator that registers an agent class under ``name``.
 
     Args:
-        name: Case-insensitive string key used with ``--algorithm``.
+        name: Case-insensitive string key used with ``--agent``.
 
     Returns:
         A decorator that registers the class and returns it unchanged.
@@ -48,10 +48,10 @@ def register(name: str):
 
 
 def get_agent_class(name: str) -> type:
-    """Look up an algorithm class by name.
+    """Look up an agent class by name.
 
     Args:
-        name: Algorithm name (case-insensitive), e.g. ``"sac"``, ``"ewc"``.
+        name: Agent name (case-insensitive), e.g. ``"sac"``, ``"ewc"``.
 
     Returns:
         The registered ``BenchmarkAgent`` subclass.
@@ -63,12 +63,12 @@ def get_agent_class(name: str) -> type:
     if key not in _REGISTRY:
         available = sorted(_REGISTRY)
         raise ValueError(
-            f"Unknown algorithm '{name}'. "
-            f"Available algorithms: {available}"
+            f"Unknown agent '{name}'. "
+            f"Available agents: {available}"
         )
     return _REGISTRY[key]
 
 
 def list_agents() -> list[str]:
-    """Return a sorted list of all registered algorithm names."""
+    """Return a sorted list of all registered agent names."""
     return sorted(_REGISTRY)

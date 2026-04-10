@@ -7,13 +7,13 @@ Usage::
 
     python scripts/evaluate.py \\
         --subject sub-01 \\
-        --algorithm ewc \\
+        --agent ewc \\
         --run_prefix 20260322_120000_seed0 \\
         --n_episodes 5
 
 Or with the installed entry point::
 
-    mariha-evaluate --subject sub-01 --algorithm ewc --run_prefix ...
+    mariha-evaluate --subject sub-01 --agent ewc --run_prefix ...
 
 Outputs a ``results.json`` in the run directory containing:
 
@@ -60,7 +60,7 @@ from mariha.eval.metrics import (
     summarise_behavioral_metrics,
 )
 from mariha.eval.runner import eval_on_scene, find_task_checkpoints
-import mariha.rl  # noqa: F401 — registers all built-in algorithms
+import mariha.rl  # noqa: F401 — registers all built-in agents
 from mariha.benchmark.registry import get_agent_class
 from mariha.utils.logging import EpochLogger
 
@@ -79,9 +79,9 @@ def build_eval_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--subject", required=True, help="Subject ID, e.g. sub-01.")
     p.add_argument(
-        "--algorithm",
+        "--agent",
         default="sac",
-        help="Algorithm name (from registry).",
+        help="Agent name (from registry).",
     )
     p.add_argument(
         "--run_prefix",
@@ -113,7 +113,7 @@ def build_eval_parser() -> argparse.ArgumentParser:
         help="Evaluate only the first N scenes (for quick debugging).",
     )
     p.add_argument("--seed", type=int, default=0)
-    # SAC-specific network flags kept for backwards compat; ignored by other algorithms
+    # SAC-specific network flags kept for backwards compat; ignored by other agents
     p.add_argument("--hidden_sizes", nargs="+", type=int, default=[256, 256])
     p.add_argument("--activation", default="tanh")
     p.add_argument("--use_layer_norm", action="store_true")
@@ -133,9 +133,9 @@ def build_eval_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _build_eval_agent(algorithm: str, checkpoint_dir: Path, env, scene_ids, args):
+def _build_eval_agent(agent_name: str, checkpoint_dir: Path, env, scene_ids, args):
     """Instantiate an agent from the registry and load a checkpoint."""
-    agent_cls = get_agent_class(algorithm)
+    agent_cls = get_agent_class(agent_name)
     eval_logger = EpochLogger(
         output_dir="/tmp/mariha_eval_tmp",
         logger_output=["stdout"],
@@ -155,8 +155,8 @@ def main() -> None:
     args = parser.parse_args()
 
     experiment_dir = Path(args.experiment_dir)
-    method_name = args.algorithm
-    checkpoint_base = experiment_dir / "checkpoints" / method_name
+    agent_name = args.agent
+    checkpoint_base = experiment_dir / "checkpoints" / agent_name
 
     # ------------------------------------------------------------------ #
     # Discover checkpoints
@@ -211,7 +211,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     logger.info("=== Final checkpoint eval ===")
     final_agent = _build_eval_agent(
-        method_name, final_checkpoint, dummy_env, scene_ids, args
+        agent_name, final_checkpoint, dummy_env, scene_ids, args
     )
 
     R_final = np.zeros(len(scenes_to_eval))
@@ -250,7 +250,7 @@ def main() -> None:
                 continue
 
             task_agent = _build_eval_agent(
-                method_name, task_checkpoints[task_idx],
+                agent_name, task_checkpoints[task_idx],
                 dummy_env, scene_ids, args,
             )
             spec = eval_specs[scene_id]
@@ -280,7 +280,7 @@ def main() -> None:
     results = {
         "metadata": {
             "subject": args.subject,
-            "algorithm": method_name,
+            "agent": agent_name,
             "run_prefix": args.run_prefix,
             "n_episodes": args.n_episodes,
             "n_scenes": len(scenes_to_eval),
@@ -298,7 +298,7 @@ def main() -> None:
         out_path = Path(args.output)
     else:
         run_dir = (
-            experiment_dir / args.subject / method_name / args.run_prefix
+            experiment_dir / args.subject / agent_name / args.run_prefix
         )
         run_dir.mkdir(parents=True, exist_ok=True)
         out_path = run_dir / "eval_results.json"

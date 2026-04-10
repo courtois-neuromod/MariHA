@@ -8,7 +8,7 @@ The eval env is built via ``make_scene_env`` from the same wrapper pipeline
 used during training, so observations and action spaces are identical.
 
 The ``agent`` argument accepts any ``BenchmarkAgent`` implementation —
-SAC, DDQN, PPO, MuZero, RandomAgent, or any custom algorithm.
+SAC, DDQN, PPO, MuZero, RandomAgent, or any custom agent.
 """
 
 from __future__ import annotations

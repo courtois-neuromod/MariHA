@@ -1,16 +1,15 @@
 """Continual learning training script.
 
-Runs any registered algorithm on the full human-aligned curriculum for a
+Runs any registered agent on the full human-aligned curriculum for a
 given subject.
 
 Usage::
 
-    mariha-run-cl --algorithm sac --subject sub-01 --seed 0
-    mariha-run-cl --algorithm ewc --subject sub-01 --seed 0
-    mariha-run-cl --algorithm ppo --subject sub-01 --seed 0
+    mariha-run-cl --agent sac --subject sub-01 --seed 0
+    mariha-run-cl --agent ewc --subject sub-01 --seed 0
+    mariha-run-cl --agent ppo --subject sub-01 --seed 0
 
-Run ``mariha-run-cl --algorithm <name> --help`` to see algorithm-specific
-flags.
+Run ``mariha-run-cl --agent <name> --help`` to see agent-specific flags.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def main() -> None:
     # ------------------------------------------------------------------
-    # Phase 1: parse benchmark-only flags so we know which algorithm to use
+    # Phase 1: parse benchmark-only flags so we know which agent to use
     # ------------------------------------------------------------------
     from mariha.benchmark.config import build_benchmark_parser
 
@@ -32,23 +31,23 @@ def main() -> None:
     bench_args, _ = bench_parser.parse_known_args()
 
     # ------------------------------------------------------------------
-    # Phase 2: trigger registry population, look up algorithm class
+    # Phase 2: trigger registry population, look up agent class
     # ------------------------------------------------------------------
-    import mariha.rl  # noqa: F401 — registers all built-in algorithms
+    import mariha.rl  # noqa: F401 — registers all built-in agents
     from mariha.benchmark.registry import get_agent_class, list_agents
 
     try:
-        agent_cls = get_agent_class(bench_args.algorithm)
+        agent_cls = get_agent_class(bench_args.agent)
     except ValueError as exc:
         print(f"ERROR: {exc}")
-        print(f"Registered algorithms: {list_agents()}")
+        print(f"Registered agents: {list_agents()}")
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # Phase 3: build the full parser with algorithm-specific flags
+    # Phase 3: build the full parser with agent-specific flags
     # ------------------------------------------------------------------
     full_parser = argparse.ArgumentParser(
-        description=f"MariHA CL benchmark — {bench_args.algorithm}",
+        description=f"MariHA CL benchmark — {bench_args.agent}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         parents=[bench_parser],
         add_help=True,

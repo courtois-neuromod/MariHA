@@ -1,11 +1,11 @@
 """Benchmark-level argument parsing and context construction.
 
 ``build_benchmark_parser()`` returns an argument parser containing only flags
-that are algorithm-independent.  Algorithm-specific flags are added separately
-by each algorithm's ``add_args()`` classmethod.
+that are agent-independent.  Agent-specific flags are added separately by
+each agent's ``add_args()`` classmethod.
 
 ``build_benchmark_context()`` constructs the curriculum, environment, and
-logger that every algorithm receives at construction time.
+logger that every agent receives at construction time.
 """
 
 from __future__ import annotations
@@ -18,28 +18,20 @@ from typing import Tuple
 from mariha.utils.running import get_readable_timestamp, str2bool
 
 
-def build_benchmark_parser() -> argparse.ArgumentParser:
-    """Return a parser containing only algorithm-agnostic benchmark flags.
+def _add_common_flags(p: argparse.ArgumentParser) -> None:
+    """Add the agent-agnostic flags shared by ``run_cl`` and ``run_single``.
 
-    These flags are common to every algorithm and are always parsed first.
-    Algorithm-specific flags (learning rate, network size, etc.) are added by
-    the algorithm's ``add_args()`` classmethod.
-
-    Returns:
-        An ``ArgumentParser`` with benchmark-level flags only.
+    These are the flags that every entry point needs regardless of whether
+    it runs a full curriculum or a single scene: agent identity, subject,
+    seed, experiment dir, render config, curriculum filtering, and logger
+    backends.
     """
-    p = argparse.ArgumentParser(
-        description="MariHA benchmark runner",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        add_help=False,  # help is added by the full parser in run_cl.py
-    )
-
     p.add_argument(
-        "--algorithm",
+        "--agent",
         type=str,
         default="sac",
-        help="Algorithm name (must be registered in mariha.rl). "
-             "Run `mariha-run-cl --algorithm <name> --help` to see "
+        help="Agent name (must be registered in mariha.rl). "
+             "Run `mariha-run-cl --agent <name> --help` to see "
              "its specific flags.",
     )
     p.add_argument(
@@ -86,6 +78,24 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
         default=["tsv", "tensorboard"],
         help="Logging backends: tsv, tensorboard, wandb.",
     )
+
+
+def build_benchmark_parser() -> argparse.ArgumentParser:
+    """Return a parser containing only agent-agnostic benchmark flags.
+
+    These flags are common to every agent and are always parsed first.
+    Agent-specific flags (learning rate, network size, etc.) are added by
+    the agent's ``add_args()`` classmethod.
+
+    Returns:
+        An ``ArgumentParser`` with benchmark-level flags only.
+    """
+    p = argparse.ArgumentParser(
+        description="MariHA benchmark runner",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,  # help is added by the full parser in run_cl.py
+    )
+    _add_common_flags(p)
 
     # Burn-in
     p.add_argument(
@@ -159,7 +169,7 @@ def build_benchmark_parser() -> argparse.ArgumentParser:
 def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     """Construct the curriculum, environment, and logger from parsed args.
 
-    This is the standard setup shared by every algorithm.  It is extracted
+    This is the standard setup shared by every agent.  It is extracted
     here so ``run_benchmark.py`` and any shim scripts can reuse it without
     duplication.
 
@@ -220,17 +230,138 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     )
 
     # Logger
-    algorithm_name = getattr(args, "algorithm", None) or "sac"
+    agent_name = getattr(args, "agent", None) or "sac"
     timestamp = get_readable_timestamp()
     experiment_dir = Path(args.experiment_dir)
     run_dir = str(
-        experiment_dir / args.subject / algorithm_name / f"{timestamp}_seed{args.seed}"
+        experiment_dir / args.subject / agent_name / f"{timestamp}_seed{args.seed}"
     )
     logger = EpochLogger(
         output_dir=run_dir,
         logger_output=args.logger_output,
         config=vars(args),
-        group_id=f"{args.subject}_{algorithm_name}",
+        group_id=f"{args.subject}_{agent_name}",
     )
 
     return env, scene_ids, logger, sequence
+
+
+def build_single_scene_parser() -> argparse.ArgumentParser:
+    """Return a parser for ``mariha-run-single`` (single-scene debugging mode).
+
+    Contains the common flags plus ``--scene_id`` (which scene to train on)
+    and ``--total_steps`` (env-step budget).  Burn-in / buffer-mode /
+    fixed-episode flags from ``build_benchmark_parser`` are intentionally
+    omitted — they would be misleading no-ops in single-scene mode.
+
+    Returns:
+        An ``ArgumentParser`` with single-scene flags only.
+    """
+    p = argparse.ArgumentParser(
+        description="MariHA single-scene runner",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,  # help is added by the full parser in run_single.py
+    )
+    _add_common_flags(p)
+    p.add_argument(
+        "--scene_id",
+        type=str,
+        default=None,
+        help="Scene ID to train on (e.g. 'w1l1s0'). "
+             "If omitted, uses the first scene in the subject's curriculum.",
+    )
+    p.add_argument(
+        "--total_steps",
+        type=int,
+        default=200_000,
+        help="Total environment steps for single-scene training. "
+             "Soft budget — the in-flight episode is allowed to finish.",
+    )
+    return p
+
+
+def build_single_scene_context(args: argparse.Namespace) -> Tuple:
+    """Construct a single-scene env, scene_ids, logger, and spec sequence.
+
+    Mirrors ``build_benchmark_context`` but feeds the agent a
+    ``StepBudgetCLEnv`` cycling forever over a single scene's episode specs,
+    capped at ``args.total_steps`` env steps.
+
+    Args:
+        args: Parsed namespace from ``build_single_scene_parser`` (plus any
+            agent-specific flags added downstream).
+
+    Returns:
+        A four-tuple ``(env, scene_ids, logger, sequence)`` matching the shape
+        returned by ``build_benchmark_context`` so the same agent constructor
+        path works in both modes.
+
+    Raises:
+        SystemExit: If the scene cannot be resolved or has no episodes.
+    """
+    import itertools
+
+    from mariha.curriculum.loader import load_curriculum
+    from mariha.env.continual import StepBudgetCLEnv
+    from mariha.env.scenario_gen import load_metadata
+    from mariha.env.base import SCENARIOS_DIR
+    from mariha.utils.logging import EpochLogger
+
+    # Canonical scene ID ordering (alphabetical, consistent across runs).
+    scene_meta = load_metadata(SCENARIOS_DIR)
+    scene_ids = sorted(scene_meta.keys())
+
+    # Resolve scene_id: explicit arg or first scene in the subject's curriculum.
+    all_specs = load_curriculum(
+        subject_id=args.subject,
+        require_existing_states=args.require_existing_states,
+    )
+    if not all_specs:
+        print(f"ERROR: No episodes found for {args.subject}. Aborting.")
+        sys.exit(1)
+
+    scene_id = args.scene_id
+    if scene_id is None:
+        scene_id = all_specs[0].scene_id
+        print(f"[run_single] No --scene_id given; using first curriculum scene: {scene_id}")
+
+    if scene_id not in scene_meta:
+        print(
+            f"ERROR: Scene '{scene_id}' not found in scenario metadata. "
+            f"Run `mariha-generate-scenarios` first."
+        )
+        sys.exit(1)
+
+    scene_specs = [s for s in all_specs if s.scene_id == scene_id]
+    if not scene_specs:
+        print(
+            f"ERROR: Scene '{scene_id}' has no episodes in {args.subject}'s curriculum."
+        )
+        sys.exit(1)
+
+    # Cycle the specs forever; StepBudgetCLEnv stops at args.total_steps.
+    spec_cycle = itertools.cycle(scene_specs)
+
+    env = StepBudgetCLEnv(
+        sequence=spec_cycle,
+        scene_ids=scene_ids,
+        max_steps=args.total_steps,
+        render_mode=args.render_mode,
+        render_speed=args.render_speed,
+    )
+
+    # Logger path: experiments/single/{scene_id}/{agent}/{timestamp}_seed{seed}
+    agent_name = getattr(args, "agent", None) or "sac"
+    timestamp = get_readable_timestamp()
+    experiment_dir = Path(args.experiment_dir)
+    run_dir = str(
+        experiment_dir / "single" / scene_id / agent_name / f"{timestamp}_seed{args.seed}"
+    )
+    logger = EpochLogger(
+        output_dir=run_dir,
+        logger_output=args.logger_output,
+        config=vars(args),
+        group_id=f"single_{scene_id}_{agent_name}",
+    )
+
+    return env, scene_ids, logger, scene_specs

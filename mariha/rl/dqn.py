@@ -6,8 +6,8 @@ per-scene buffer mode from TODO 3.
 
 Usage::
 
-    mariha-run-cl --algorithm dqn  --subject sub-01 --seed 0 --lr 1e-4
-    mariha-run-cl --algorithm ddqn --subject sub-01 --seed 0 --lr 1e-4
+    mariha-run-cl --agent dqn  --subject sub-01 --seed 0 --lr 1e-4
+    mariha-run-cl --agent ddqn --subject sub-01 --seed 0 --lr 1e-4
 """
 
 from __future__ import annotations

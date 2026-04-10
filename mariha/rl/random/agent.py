@@ -5,13 +5,13 @@ serves two purposes:
 
 1. **Documentation template**: the simplest possible complete implementation
    of ``BenchmarkAgent``.  Copy this file, replace the random policy with
-   your algorithm, and you have a working MariHA agent.
+   your agent, and you have a working MariHA agent.
 
 2. **Performance lower bound**: running the benchmark with
-   ``--algorithm random`` produces a valid ``eval_results.json`` with AP,
+   ``--agent random`` produces a valid ``eval_results.json`` with AP,
    BWT, and behavioral metrics that anchor comparisons.
 
-See ``docs/adding_an_algorithm.md`` for a step-by-step guide.
+See ``docs/adding_an_agent.md`` for a step-by-step guide.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ class RandomAgent(BenchmarkAgent):
     def save_checkpoint(self, directory: Path) -> None:
         """Save agent metadata to ``directory/agent.json``."""
         directory.mkdir(parents=True, exist_ok=True)
-        meta = {"algorithm": "random", "n_actions": int(self.n_actions)}
+        meta = {"agent": "random", "n_actions": int(self.n_actions)}
         (directory / "agent.json").write_text(json.dumps(meta, indent=2))
 
     def load_checkpoint(self, directory: Path) -> None:
@@ -142,7 +142,7 @@ class RandomAgent(BenchmarkAgent):
 
     @classmethod
     def add_args(cls, parser) -> None:
-        """RandomAgent has no algorithm-specific hyperparameters."""
+        """RandomAgent has no agent-specific hyperparameters."""
 
     @classmethod
     def from_args(cls, args, env, logger, scene_ids) -> "RandomAgent":
@@ -161,11 +161,11 @@ class RandomAgent(BenchmarkAgent):
     # ------------------------------------------------------------------
 
     def _checkpoint_dir(self, task_idx: int) -> Path:
-        algorithm = "random"
+        agent_name = "random"
         ts = self.timestamp or ""
         return (
             self.experiment_dir
             / "checkpoints"
-            / algorithm
+            / agent_name
             / f"{ts}_task{task_idx}"
         )

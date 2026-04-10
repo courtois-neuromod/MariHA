@@ -52,7 +52,7 @@ Training — full CL curriculum
 .. code-block:: bash
 
    mariha-run-cl \
-     --algorithm  ewc \
+     --agent      ewc \
      --subject    sub-01 \
      --seed       0
 
@@ -72,9 +72,9 @@ Key training arguments:
    * - ``--subject``
      - *(required)*
      - Subject ID: ``sub-01``, ``sub-02``, ``sub-03``, ``sub-05``, ``sub-06``
-   * - ``--algorithm``
+   * - ``--agent``
      - ``sac``
-     - Algorithm name (see :doc:`cl_methods`).  Supports ``sac``, ``ppo``, ``dqn``, and all CL methods.
+     - Agent name (see :doc:`cl_methods`).  Supports ``sac``, ``ppo``, ``dqn``, and all CL methods.
    * - ``--seed``
      - ``0``
      - Global random seed.
@@ -143,7 +143,7 @@ After training, evaluate the saved checkpoints:
 
    mariha-evaluate \
      --subject     sub-01 \
-     --algorithm   ewc \
+     --agent       ewc \
      --run_prefix  20260322_120000_seed0 \
      --n_episodes  5 \
      --eval_diagonal

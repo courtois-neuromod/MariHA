@@ -1,4 +1,4 @@
-"""Neural network architectures for MariHA RL algorithms.
+"""Neural network architectures for MariHA RL agents.
 
 Architectures
 -------------
