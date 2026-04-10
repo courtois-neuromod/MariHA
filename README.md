@@ -60,10 +60,10 @@ mariha-run-cl --algorithm ppo --subject sub-01 --seed 0
 mariha-run-cl --algorithm dqn --subject sub-01 --seed 0
 ```
 
-Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time:
+Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time. Pair it with `--render_speed S` to slow down or speed up the playback (1.0 = 60 fps, 0.5 = 30 fps, 10 = up to 600 fps best-effort):
 
 ```bash
-mariha-run-cl --algorithm ewc --subject sub-01 --seed 0 --render_every 100
+mariha-run-cl --algorithm ewc --subject sub-01 --seed 0 --render_every 100 --render_speed 0.5
 ```
 
 ### Train (single scene, for debugging)
@@ -72,10 +72,10 @@ mariha-run-cl --algorithm ewc --subject sub-01 --seed 0 --render_every 100
 mariha-run-single --scene_id w1l1s0 --seed 0
 ```
 
-Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time:
+Pass `--render_every N` to open a live window every N episodes and watch the agent play in real time. Use `--render_speed S` to adjust playback speed (default `1.0` = 60 fps):
 
 ```bash
-mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10
+mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 10 --render_speed 0.5
 ```
 
 ### Evaluate

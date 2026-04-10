@@ -94,6 +94,10 @@ Key training arguments:
      - ``0``
      - Open a live window every this many episodes to watch the agent play
        one full greedy episode. ``0`` = disabled.
+   * - ``--render_speed``
+     - ``1.0``
+     - Playback speed multiplier for the live render window. ``1.0`` = 60 fps
+       (native), ``<1`` slows playback down, ``>1`` speeds it up (best-effort).
 
 Training — single scene (debugging)
 -------------------------------------
@@ -104,11 +108,12 @@ Training — single scene (debugging)
 
 Pass ``--render_every N`` to open a live window and watch one full greedy
 episode every *N* training episodes — useful for checking progress at a
-glance without slowing down training:
+glance without slowing down training.  Combine it with ``--render_speed S``
+to slow down or speed up playback (``1.0`` = 60 fps native):
 
 .. code-block:: bash
 
-   mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 50
+   mariha-run-single --scene_id w1l1s0 --seed 0 --render_every 50 --render_speed 0.5
 
 .. list-table::
    :widths: 25 10 65
@@ -124,6 +129,10 @@ glance without slowing down training:
      - ``0``
      - If > 0, open a live window every this many episodes to watch the
        agent play one full greedy episode. ``0`` = disabled.
+   * - ``--render_speed``
+     - ``1.0``
+     - Playback speed multiplier for the live render window. ``1.0`` = 60 fps
+       (native), ``<1`` slows playback down, ``>1`` speeds it up (best-effort).
 
 Evaluation
 ----------

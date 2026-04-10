@@ -149,11 +149,13 @@ debugging, hyperparameter tuning, or quick proof-of-concept runs.
 Pass ``--render_every N`` to open a live window and watch the agent play
 one full greedy episode every *N* training episodes.  Training pauses,
 the window opens, the episode plays to termination, then the window closes
-and training resumes.
+and training resumes.  Use ``--render_speed S`` to scale playback speed
+(``1.0`` = native 60 fps, ``0.5`` = 30 fps, ``10`` = up to 600 fps
+best-effort).
 
 .. code-block:: bash
 
-   mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50
+   mariha-run-single --subject sub-01 --scene_id w1l1s0 --render_every 50 --render_speed 0.5
 
 .. list-table::
    :widths: 25 10 65
@@ -168,6 +170,10 @@ and training resumes.
    * - ``--render_every``
      - ``0``
      - Open a live render window every this many episodes. ``0`` = disabled.
+   * - ``--render_speed``
+     - ``1.0``
+     - Playback speed multiplier for live render windows. ``1.0`` = 60 fps
+       (native), ``<1`` slows down, ``>1`` speeds up (best-effort).
 
 Live render checkpoints
 -----------------------
@@ -188,6 +194,15 @@ Training pauses, the window opens, the episode plays to termination, then
 the window closes and training resumes.  The underlying implementation
 (``play_render_episode`` in ``mariha.env.continual``) is shared between both
 entry points.
+
+Use ``--render_speed S`` together with ``--render_every`` to control
+playback speed when a render window opens.  ``1.0`` is the native 60 fps,
+values below ``1`` slow playback down (useful if the default is too fast
+to follow), and values above ``1`` speed it up on a best-effort basis:
+
+.. code-block:: bash
+
+   mariha-run-cl --algorithm ewc --subject sub-01 --render_every 100 --render_speed 0.5
 
 Checkpointing
 -------------
