@@ -135,7 +135,7 @@ class TrainingProgress(ABC):
         self._success_buf: Deque[bool] = deque(maxlen=self._SUCCESS_WINDOW)
         self._return_buf: Deque[float] = deque(maxlen=self._RETURN_WINDOW)
         self._episodes_completed: int = 0
-        self._scene_ids: List[str] = []
+        self._run_ids: List[str] = []
 
     # ------------------------------------------------------------------
     # Meta init (called before `start` so the factory can pre-populate
@@ -150,11 +150,11 @@ class TrainingProgress(ABC):
         seed: int,
         clip_total: Optional[int] = None,
         total_steps: Optional[int] = None,
-        scene_ids: Optional[List[str]] = None,
+        run_ids: Optional[List[str]] = None,
     ) -> None:
         """Populate agent/subject/budget fields before the loop starts.
 
-        ``scene_ids``, when supplied, lets ``on_reset`` resolve task indices
+        ``run_ids``, when supplied, lets ``on_reset`` resolve task indices
         automatically so the env (and any agent) never has to call
         ``on_task_switch`` explicitly.
         """
@@ -163,9 +163,9 @@ class TrainingProgress(ABC):
         self._snap.seed = seed
         self._snap.clip_total = clip_total
         self._snap.total_steps = total_steps
-        if scene_ids is not None:
-            self._scene_ids = list(scene_ids)
-            self._snap.total_tasks = len(self._scene_ids)
+        if run_ids is not None:
+            self._run_ids = list(run_ids)
+            self._snap.total_tasks = len(self._run_ids)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -210,9 +210,10 @@ class TrainingProgress(ABC):
         s.phase = str(info.get("phase", ""))
         s.human_outcome = str(info.get("human_outcome", ""))
         s.max_steps = int(info.get("max_steps", 0))
-        if self._scene_ids and s.scene_id in self._scene_ids:
-            s.task_idx = self._scene_ids.index(s.scene_id)
-            s.total_tasks = len(self._scene_ids)
+        run_id = str(info.get("run_id", ""))
+        if self._run_ids and run_id in self._run_ids:
+            s.task_idx = self._run_ids.index(run_id)
+            s.total_tasks = len(self._run_ids)
         # Scene boundary → emit a task-switch log line (once we have a
         # previous scene to compare against; the very first reset is silent).
         if prev_scene and prev_scene != s.scene_id:

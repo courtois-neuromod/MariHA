@@ -65,16 +65,18 @@ def run_burn_in(
 
     scene_meta = load_metadata(SCENARIOS_DIR)
     exit_point = scene_meta[scene_id]["exit_point"]
+    run_id = burn_in_spec.run_id
     burn_env = make_scene_env(
         scene_id=scene_id,
         exit_point=exit_point,
-        scene_ids=agent.scene_ids,
+        run_id=run_id,
+        run_ids=agent.run_ids,
         render_mode=None,
     )
 
     task_idx = (
-        agent.scene_ids.index(scene_id)
-        if scene_id in agent.scene_ids
+        agent.run_ids.index(run_id)
+        if run_id in agent.run_ids
         else 0
     )
     agent.on_burn_in_start(task_idx)
@@ -108,6 +110,7 @@ def run_burn_in(
                 truncated=truncated,
                 one_hot=one_hot_vec,
                 scene_id=scene_id,
+                run_id=run_id,
                 info=step_info,
                 extras=extras,
             )

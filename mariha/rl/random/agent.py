@@ -32,14 +32,14 @@ class RandomAgent(BenchmarkAgent):
         self,
         env,
         logger: EpochLogger,
-        scene_ids: list[str],
+        run_ids: list[str],
         seed: int = 0,
         experiment_dir: Path = Path("experiments"),
         timestamp: str = "",
     ) -> None:
         self.env = env
         self.logger = logger
-        self.scene_ids = scene_ids
+        self.run_ids = run_ids
         self.n_actions = env.action_space.n
         self.rng = np.random.default_rng(seed)
         self.experiment_dir = experiment_dir
@@ -66,14 +66,14 @@ class RandomAgent(BenchmarkAgent):
             self.logger.log("Curriculum is empty — nothing to train.", color="red")
             return
 
-        current_scene_id: str = info.get("scene_id", "")
+        current_run_id: str = info.get("run_id", "")
         current_task_idx: int = (
-            self.scene_ids.index(current_scene_id)
-            if current_scene_id in self.scene_ids
+            self.run_ids.index(current_run_id)
+            if current_run_id in self.run_ids
             else 0
         )
         one_hot_vec = info["task_one_hot"]
-        self.on_task_start(current_task_idx, current_scene_id)
+        self.on_task_start(current_task_idx, current_run_id)
 
         episode_return = 0.0
         episode_len = 0
@@ -111,10 +111,10 @@ class RandomAgent(BenchmarkAgent):
 
                 if info.get("task_switch", False):
                     self.on_task_end(current_task_idx)
-                    new_scene_id = info.get("scene_id", "")
+                    new_run_id = info.get("run_id", "")
                     new_task_idx = (
-                        self.scene_ids.index(new_scene_id)
-                        if new_scene_id in self.scene_ids
+                        self.run_ids.index(new_run_id)
+                        if new_run_id in self.run_ids
                         else current_task_idx
                     )
                     # Save a checkpoint for the completed task
@@ -122,8 +122,8 @@ class RandomAgent(BenchmarkAgent):
                     self.save_checkpoint(task_dir)
 
                     current_task_idx = new_task_idx
-                    current_scene_id = new_scene_id
-                    self.on_task_start(current_task_idx, current_scene_id)
+                    current_run_id = new_run_id
+                    self.on_task_start(current_task_idx, current_run_id)
 
         self.on_task_end(current_task_idx)
         self.save_checkpoint(self._checkpoint_dir(current_task_idx))
@@ -149,7 +149,7 @@ class RandomAgent(BenchmarkAgent):
         """RandomAgent has no agent-specific hyperparameters."""
 
     @classmethod
-    def from_args(cls, args, env, logger, scene_ids) -> "RandomAgent":
+    def from_args(cls, args, env, logger, run_ids) -> "RandomAgent":
         from mariha.utils.running import get_readable_timestamp
         # Prefer the seeded timestamp the benchmark context already composed
         # so the checkpoint dir leaf shares its prefix with the run dir leaf.
@@ -159,7 +159,7 @@ class RandomAgent(BenchmarkAgent):
         return cls(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             seed=getattr(args, "seed", 0),
             experiment_dir=Path(getattr(args, "experiment_dir", "experiments")),
             timestamp=timestamp,

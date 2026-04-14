@@ -4,24 +4,29 @@
 It wraps a fully-stacked ``SceneEnv`` (with all observation and action
 wrappers applied) and drives the episode sequence provided by the curriculum.
 
-On each ``reset()`` call:
-- The next ``EpisodeSpec`` is popped from the sequence.
-- If the scene has changed since the last episode, ``task_switch=True`` is
-  set in the returned ``info`` dict so that CL methods can update their
-  importance weights, prune masks, etc.
-- The ``TaskIdWrapper`` is updated to reflect the new scene ID.
+Vocabulary (see ``docs/glossary.rst``): one BIDS fMRI run drives one
+continual-learning task; one ``EpisodeSpec`` = one clip = one human attempt
+at one scene; the scene is the Mario sub-region (e.g. ``w1l1s0``).
+
+Every ``reset()`` advances exactly one clip — the clip is the atomic unit
+of the curriculum.  The ``*_switch`` flags in ``info`` are conditions on
+that transition (did the run / scene / session differ from the previous
+clip's?):
+
+- ``info["task_switch"]`` is ``True`` when the BIDS run changes (i.e. the
+  agent has entered a new task). CL methods consume this to consolidate
+  importance weights, prune masks, episodic memory, etc.
+- ``info["scene_switch"]`` is ``True`` when the scene changes.  Gates the
+  emulator rebuild (the retro scenario file is per-scene); also drives a
+  diagnostic log line.  No agent hook fires on this.
+- The ``TaskIdWrapper`` is updated to reflect the new run ID (the one-hot
+  is task-level, i.e. per-run).
+- The underlying ``SceneEnv`` is rebuilt whenever the scene changes (the
+  retro scenario file is scene-specific), regardless of task boundaries.
 
 The episode sequence is provided by a ``BaseSequence`` (see
 ``mariha.curriculum.sequences``).  The default is ``HumanSequence``, which
 replays human clips in ``clip_code`` order.
-
-Args:
-    sequence: A ``BaseSequence`` instance that yields ``EpisodeSpec`` objects.
-    scene_ids: Ordered list of all valid scene IDs (defines the one-hot
-        task vector index).  Use ``mariha.env.scenario_gen.load_metadata``
-        to obtain the full list.
-    render_mode: Passed through to ``MarioEnv``.
-    seed: Optional global RNG seed.
 """
 
 from __future__ import annotations
@@ -50,7 +55,8 @@ logger = logging.getLogger(__name__)
 def make_scene_env(
     scene_id: str,
     exit_point: int,
-    scene_ids: list[str],
+    run_id: str,
+    run_ids: list[str],
     render_mode: str | None = None,
     stimuli_path: Path = STIMULI_PATH,
     scenarios_dir: Path = SCENARIOS_DIR,
@@ -58,18 +64,21 @@ def make_scene_env(
     """Build and return a fully-wrapped scene environment.
 
     Applies the full observation pipeline (grayscale → resize → frame-stack
-    → task-ID) and the discrete action wrapper.
+    → task-ID) and the discrete action wrapper. The scene identifies the
+    physical emulator configuration; the run identifies the task for one-hot
+    conditioning.
 
     Args:
-        scene_id: Scene identifier (e.g. ``'w1l1s0'``).
+        scene_id: Scene identifier (e.g. ``'w1l1s0'``). Drives the emulator.
         exit_point: X-coordinate at which the scene is considered cleared.
-        scene_ids: Ordered list of all scene IDs for the one-hot encoding.
+        run_id: Current task identifier (e.g. ``'ses-001_run-02'``).
+        run_ids: Ordered list of all run IDs defining the task one-hot index.
         render_mode: Render mode for ``MarioEnv``.
         stimuli_path: Override for the stimuli directory.
         scenarios_dir: Override for the scenario files directory.
 
     Returns:
-        A ``TaskIdWrapper``-wrapped env ready for the SAC training loop.
+        A ``TaskIdWrapper``-wrapped env ready for the training loop.
     """
     env = SceneEnv(
         scene_id=scene_id,
@@ -82,7 +91,7 @@ def make_scene_env(
     env = GrayscaleWrapper(env)
     env = ResizeWrapper(env)
     env = FrameStackWrapper(env)
-    env = TaskIdWrapper(env, scene_id=scene_id, scene_ids=scene_ids)
+    env = TaskIdWrapper(env, run_id=run_id, run_ids=run_ids)
     return env
 
 
@@ -90,7 +99,8 @@ def play_render_episode(
     actor_fn,
     scene_id: str,
     exit_point: int,
-    scene_ids: list[str],
+    run_id: str,
+    run_ids: list[str],
     spec,
     stimuli_path: Path = STIMULI_PATH,
     scenarios_dir: Path = SCENARIOS_DIR,
@@ -107,7 +117,8 @@ def play_render_episode(
         actor_fn: Callable ``(obs, one_hot) -> int`` — the current policy.
         scene_id: Scene to render.
         exit_point: X-coordinate goal for the scene.
-        scene_ids: Full ordered list of scene IDs (for one-hot encoding).
+        run_id: Current task (run) identifier for the one-hot.
+        run_ids: Full ordered list of run IDs (for one-hot encoding).
         spec: ``EpisodeSpec`` to load as the starting state.
         stimuli_path: Override for stimuli directory.
         scenarios_dir: Override for scenario files directory.
@@ -119,7 +130,8 @@ def play_render_episode(
     render_env = make_scene_env(
         scene_id=scene_id,
         exit_point=exit_point,
-        scene_ids=scene_ids,
+        run_id=run_id,
+        run_ids=run_ids,
         render_mode="human",
         stimuli_path=stimuli_path,
         scenarios_dir=scenarios_dir,
@@ -162,7 +174,10 @@ class ContinualLearningEnv:
 
     Args:
         sequence: A ``BaseSequence`` (or any iterable of ``EpisodeSpec``).
-        scene_ids: Ordered list of all valid scene IDs.
+        scene_ids: Ordered list of scene IDs the emulator knows about
+            (from ``load_metadata``) — used for scene metadata lookups.
+        run_ids: Ordered list of all run IDs in the subject's curriculum.
+            Defines the task one-hot dimension and indexing.
         render_mode: Render mode for ``MarioEnv``.
         render_speed: Speed multiplier for rendering (1 = 60 fps).
         stimuli_path: Override for the stimuli directory.
@@ -176,6 +191,7 @@ class ContinualLearningEnv:
         self,
         sequence: Any,
         scene_ids: list[str],
+        run_ids: list[str],
         render_mode: str | None = None,
         render_speed: float = 1.0,
         stimuli_path: Path = STIMULI_PATH,
@@ -187,6 +203,7 @@ class ContinualLearningEnv:
             len(sequence) if hasattr(sequence, "__len__") else None
         )
         self._scene_ids = scene_ids
+        self._run_ids = run_ids
         self._render_mode = render_mode
         self._render_speed = render_speed
         self._stimuli_path = stimuli_path
@@ -199,6 +216,7 @@ class ContinualLearningEnv:
         # Active environment and tracking state.
         self._env: TaskIdWrapper | None = None
         self._current_scene_id: str | None = None
+        self._current_run_id: str | None = None
         self._next_spec: Any = None  # prefetched from sequence
         self._current_spec: Any = None  # spec of the episode currently being played
         self._episode_count: int = 0
@@ -215,7 +233,10 @@ class ContinualLearningEnv:
         # Prefetch the first spec so we can set up observation/action spaces.
         self._prefetch_next()
         if self._next_spec is not None:
-            self._build_env(self._next_spec.scene_id)
+            self._build_env(
+                self._next_spec.scene_id,
+                self._next_spec.run_id,
+            )
 
     # ------------------------------------------------------------------
     # gymnasium interface
@@ -242,8 +263,10 @@ class ContinualLearningEnv:
 
         Returns:
             ``(observation, info)`` where ``info`` contains:
-            - ``task_switch`` (bool): True if the scene ID changed.
-            - ``scene_id`` (str): Current scene.
+            - ``task_switch`` (bool): True if the BIDS run changed.
+            - ``scene_switch`` (bool): True if the scene changed.
+            - ``run_id`` / ``run_index`` (str/int): Current task identity.
+            - ``scene_id`` (str): Current Mario scene.
             - ``episode_index`` (int): Global episode counter.
             - All fields from ``SceneEnv._add_episode_info()``.
 
@@ -261,22 +284,36 @@ class ContinualLearningEnv:
 
         spec = self._next_spec
         self._current_spec = spec
-        task_switch = spec.scene_id != self._current_scene_id
+        task_switch = spec.run_id != self._current_run_id
+        scene_switch = spec.scene_id != self._current_scene_id
 
-        # Rebuild the env if the task changed.
-        if task_switch:
+        # Rebuild the underlying SceneEnv whenever the scene changes (the
+        # retro scenario file is scene-specific). The task one-hot on the
+        # wrapper is updated even when the scene stays the same but the run
+        # changes (e.g. a scene reappearing in a new task).
+        if scene_switch:
             if self._env is not None:
                 self._env.close()
-            self._build_env(spec.scene_id)
-            self._current_scene_id = spec.scene_id
-            logger.info("Task switch → %s", spec.scene_id)
-        else:
-            # Same scene: just update the task ID wrapper (no-op here,
-            # but makes the interface consistent).
-            self._env.set_scene_id(spec.scene_id)  # type: ignore[union-attr]
+            self._build_env(spec.scene_id, spec.run_id)
+        elif task_switch:
+            # Same scene, new run: just retag the one-hot.
+            self._env.set_run_id(spec.run_id)  # type: ignore[union-attr]
+
+        if task_switch:
+            logger.info("Task switch → %s (scene=%s)", spec.run_id, spec.scene_id)
+        elif scene_switch:
+            logger.debug(
+                "Scene switch within %s → %s", spec.run_id, spec.scene_id
+            )
+
+        self._current_run_id = spec.run_id
+        self._current_scene_id = spec.scene_id
 
         obs, info = self._env.reset(episode_spec=spec, seed=seed)
         info["task_switch"] = task_switch
+        info["scene_switch"] = scene_switch
+        info["run_id"] = spec.run_id
+        info["run_index"] = spec.run_index
         info["session"] = spec.session
         info["session_switch"] = (
             self._current_session is not None
@@ -389,11 +426,13 @@ class ContinualLearningEnv:
         if self._env is not None:
             return
         scene_id = self._current_scene_id
+        run_id = self._current_run_id
         if scene_id is None and self._next_spec is not None:
             scene_id = self._next_spec.scene_id
-        if scene_id is None:
+            run_id = self._next_spec.run_id
+        if scene_id is None or run_id is None:
             return
-        self._build_env(scene_id)
+        self._build_env(scene_id, run_id)
 
     @property
     def is_done(self) -> bool:
@@ -434,13 +473,14 @@ class ContinualLearningEnv:
             actor_fn=actor_fn,
             scene_id=self._current_scene_id,
             exit_point=meta["exit_point"],
-            scene_ids=self._scene_ids,
+            run_id=self._current_run_id,
+            run_ids=self._run_ids,
             spec=self._current_spec,
             stimuli_path=self._stimuli_path,
             scenarios_dir=self._scenarios_dir,
             render_speed=self._render_speed,
         )
-        self._build_env(self._current_scene_id)
+        self._build_env(self._current_scene_id, self._current_run_id)
 
     def _prefetch_next(self) -> None:
         """Advance the sequence iterator by one step."""
@@ -450,11 +490,12 @@ class ContinualLearningEnv:
             self._next_spec = None
             self._done = True
 
-    def _build_env(self, scene_id: str) -> None:
-        """Create a fresh wrapped env for ``scene_id``.
+    def _build_env(self, scene_id: str, run_id: str) -> None:
+        """Create a fresh wrapped env for ``scene_id`` tagged with ``run_id``.
 
         Args:
-            scene_id: Scene identifier to build the env for.
+            scene_id: Scene identifier to build the env for (drives emulator).
+            run_id: Current task (run) identifier for the one-hot.
         """
         meta = self._scene_metadata.get(scene_id)
         if meta is None:
@@ -465,7 +506,8 @@ class ContinualLearningEnv:
         self._env = make_scene_env(
             scene_id=scene_id,
             exit_point=meta["exit_point"],
-            scene_ids=self._scene_ids,
+            run_id=run_id,
+            run_ids=self._run_ids,
             render_mode=self._render_mode,
             stimuli_path=self._stimuli_path,
             scenarios_dir=self._scenarios_dir,
@@ -502,6 +544,7 @@ class StepBudgetCLEnv(ContinualLearningEnv):
         self,
         sequence: Any,
         scene_ids: list[str],
+        run_ids: list[str],
         max_steps: int,
         render_mode: str | None = None,
         render_speed: float = 1.0,
@@ -512,6 +555,7 @@ class StepBudgetCLEnv(ContinualLearningEnv):
         super().__init__(
             sequence=sequence,
             scene_ids=scene_ids,
+            run_ids=run_ids,
             render_mode=render_mode,
             render_speed=render_speed,
             stimuli_path=stimuli_path,

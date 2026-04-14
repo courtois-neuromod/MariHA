@@ -95,8 +95,10 @@ class MockEnv:
         info = {
             "task_one_hot": np.zeros(6, dtype=np.float32),
             "scene_id": ep["scene_id"],
+            "run_id": ep.get("run_id", ep["scene_id"]),
             "session": ep["session"],
             "task_switch": ep.get("task_switch", False) if self._idx > 0 else False,
+            "scene_switch": ep.get("scene_switch", False) if self._idx > 0 else False,
             "session_switch": ep.get("session_switch", False) if self._idx > 0 else False,
         }
         return np.zeros(4, dtype=np.float32), info
@@ -163,11 +165,11 @@ class MockAgent(BaseAgent):
     to ``self.events`` so callback order can be asserted.
     """
 
-    def __init__(self, env, logger, scene_ids, **kwargs) -> None:
+    def __init__(self, env, logger, run_ids, **kwargs) -> None:
         super().__init__(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             agent_name="mock",
             **kwargs,
         )
@@ -216,14 +218,14 @@ class MockAgent(BaseAgent):
 
     # ---- Optional lifecycle hooks (overridden to record) ----
 
-    def on_task_start(self, task_idx: int, scene_id: str) -> None:
-        self.events.append(("on_task_start", task_idx, scene_id))
+    def on_task_start(self, task_idx: int, run_id: str) -> None:
+        self.events.append(("on_task_start", task_idx, run_id))
 
     def on_task_end(self, task_idx: int) -> None:
         self.events.append(("on_task_end", task_idx))
 
-    def on_task_change(self, new_task_idx: int, new_scene_id: str) -> None:
-        self.events.append(("on_task_change", new_task_idx, new_scene_id))
+    def on_task_change(self, new_task_idx: int, new_run_id: str) -> None:
+        self.events.append(("on_task_change", new_task_idx, new_run_id))
 
     def handle_session_boundary(self, current_task_idx: int) -> None:
         self.events.append(("handle_session_boundary", current_task_idx))
@@ -272,6 +274,7 @@ def _build_curriculum() -> List[Dict[str, Any]]:
         episodes.append(
             {
                 "scene_id": f"scene{task_idx}",
+                "run_id": f"run{task_idx}",
                 "session": f"task{task_idx}_seg{int(i in extra_session_starts)}",
                 "length": 100,
                 "task_switch": is_task_switch,
@@ -301,7 +304,7 @@ def test_runner_full_curriculum():
         agent = MockAgent(
             env=env,
             logger=logger,
-            scene_ids=[f"scene{i}" for i in range(6)],
+            run_ids=[f"run{i}" for i in range(6)],
             seed=0,
             log_every=1000,
             save_freq_epochs=5,
@@ -373,8 +376,8 @@ def test_runner_full_curriculum():
             raise AssertionError("no intermediate on_task_end found in events")
 
         # ---- initial lifecycle ordering ----
-        assert agent.events[0] == ("on_task_start", 0, "scene0")
-        assert agent.events[1] == ("on_task_change", 0, "scene0")
+        assert agent.events[0] == ("on_task_start", 0, "run0")
+        assert agent.events[1] == ("on_task_change", 0, "run0")
 
 
 def test_runner_empty_curriculum():
@@ -391,7 +394,7 @@ def test_runner_empty_curriculum():
         agent = MockAgent(
             env=env,
             logger=logger,
-            scene_ids=["scene0"],
+            run_ids=["run0"],
             seed=0,
             experiment_dir=Path(tmp),
             timestamp="empty",
@@ -408,6 +411,7 @@ def test_runner_single_episode():
     episodes = [
         {
             "scene_id": "scene0",
+            "run_id": "run0",
             "session": "sess0",
             "length": 10,
             "task_switch": False,
@@ -420,7 +424,7 @@ def test_runner_single_episode():
         agent = MockAgent(
             env=env,
             logger=logger,
-            scene_ids=["scene0"],
+            run_ids=["run0"],
             seed=0,
             log_every=1000,
             save_freq_epochs=1,
@@ -434,8 +438,8 @@ def test_runner_single_episode():
         assert agent.transitions == 10
 
         # Events: initial start/change, episode end, final task end.
-        assert agent.events[0] == ("on_task_start", 0, "scene0")
-        assert agent.events[1] == ("on_task_change", 0, "scene0")
+        assert agent.events[0] == ("on_task_start", 0, "run0")
+        assert agent.events[1] == ("on_task_change", 0, "run0")
         assert agent.events[2] == ("on_episode_end", 1)
         assert agent.events[3] == ("on_task_end", 0)
         assert len(agent.events) == 4
@@ -445,3 +449,53 @@ def test_runner_single_episode():
         assert logger.dumps == 0
         # But the final checkpoint still fires
         assert len(agent.saved_dirs) == 1
+
+
+def test_runner_scene_switch_no_task_hooks():
+    """Within a single run, a scene change should fire scene_switch
+    but NOT task_switch — no on_task_end / on_task_start / on_task_change
+    hooks may fire on the boundary."""
+    episodes = [
+        {
+            "scene_id": "scene0",
+            "run_id": "run0",
+            "session": "sess0",
+            "length": 5,
+            "task_switch": False,
+            "scene_switch": False,
+            "session_switch": False,
+        },
+        {
+            "scene_id": "scene1",
+            "run_id": "run0",
+            "session": "sess0",
+            "length": 5,
+            "task_switch": False,
+            "scene_switch": True,
+            "session_switch": False,
+        },
+    ]
+    env = MockEnv(episodes)
+    logger = MockLogger()
+    with tempfile.TemporaryDirectory() as tmp:
+        agent = MockAgent(
+            env=env,
+            logger=logger,
+            run_ids=["run0"],
+            seed=0,
+            log_every=1000,
+            save_freq_epochs=1,
+            render_every=0,
+            experiment_dir=Path(tmp),
+            timestamp="scene_switch",
+        )
+        agent.run()
+
+        # Exactly one initial start/change pair, one final end — no
+        # mid-curriculum task hooks despite the scene change.
+        starts = [e for e in agent.events if e[0] == "on_task_start"]
+        ends = [e for e in agent.events if e[0] == "on_task_end"]
+        changes = [e for e in agent.events if e[0] == "on_task_change"]
+        assert len(starts) == 1
+        assert len(ends) == 1
+        assert len(changes) == 1

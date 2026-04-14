@@ -21,11 +21,21 @@ class EpisodeSpec:
             that initialises the emulator at the start of this human clip.
         max_steps: Maximum number of environment steps allowed (equal to
             ``frame_stop - frame_start`` from the events TSV).
-        scene_id: Scene identifier (e.g. ``'w1l1s0'``).
+        scene_id: Scene identifier (e.g. ``'w1l1s0'``) — the Mario sub-region
+            this clip plays through. Multiple clips share a scene; multiple
+            scenes can appear within one run.
         clip_code: 14-character ordinal sort key derived from the replay
             filename (lower value = earlier in the session).
         subject: Subject identifier (e.g. ``'sub-01'``).
         session: Session identifier (e.g. ``'ses-001'``).
+        run_number: BIDS run number within the session (parsed from the
+            events TSV filename, e.g. ``2`` for ``..._run-02_...``).
+        run_id: Canonical run identifier, ``f"{session}_run-{run_number:02d}"``
+            (e.g. ``'ses-001_run-02'``). One BIDS run = one continual-learning
+            **task**.
+        run_index: Chronological ordinal of this run within the subject's
+            curriculum (0-based). Assigned by the loader after the global
+            clip_code sort.
         outcome: Human outcome for this clip (``'completed'`` or ``'failed'``).
         phase: Experimental phase label (e.g. ``'discovery'``, ``'repetition'``).
         level: Level string (e.g. ``'w1l1'``).
@@ -39,6 +49,9 @@ class EpisodeSpec:
     clip_code: str
     subject: str
     session: str
+    run_number: int
+    run_id: str
+    run_index: int
     outcome: str
     phase: str
     level: str

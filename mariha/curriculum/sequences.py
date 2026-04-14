@@ -59,10 +59,26 @@ class BaseSequence(ABC):
 
     @property
     def scene_ids(self) -> list[str]:
-        """Ordered unique scene IDs encountered in this sequence."""
+        """Ordered unique scene IDs encountered in this sequence.
+
+        See ``docs/glossary.rst`` for the relationship between scenes,
+        runs (= CL tasks), and clips.
+        """
         seen: dict[str, None] = {}
         for spec in self._specs:
             seen[spec.scene_id] = None
+        return list(seen)
+
+    @property
+    def run_ids(self) -> list[str]:
+        """Ordered unique run IDs in chronological (encounter) order.
+
+        One BIDS run = one continual-learning **task**. The ordinal position
+        in this list equals the ``run_index`` stored on each spec.
+        """
+        seen: dict[str, None] = {}
+        for spec in self._specs:
+            seen[spec.run_id] = None
         return list(seen)
 
     @property

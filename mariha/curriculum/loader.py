@@ -16,6 +16,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,8 @@ import pandas as pd
 from mariha.curriculum.episode import EpisodeSpec
 
 logger = logging.getLogger(__name__)
+
+_RUN_RE = re.compile(r"_run-(\d+)_")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -95,12 +98,20 @@ def load_curriculum(
     rows: list[pd.Series] = []
     for tsv_path in tsv_files:
         session = tsv_path.parts[-3]  # ses-XXX
+        m = _RUN_RE.search(tsv_path.name)
+        if m is None:
+            raise ValueError(
+                f"Cannot parse run number from TSV filename: {tsv_path.name}"
+            )
+        run_number = int(m.group(1))
+
         # Read clip_code as string to preserve leading zeros (14-char ordinal key).
         df = pd.read_csv(tsv_path, sep="\t", dtype={"clip_code": str})
 
         # Keep only scene-level rows.
         scene_rows = df[df["trial_type"] == "scene"].copy()
         scene_rows["_session"] = session
+        scene_rows["_run_number"] = run_number
         rows.append(scene_rows)
 
     all_scenes = pd.concat(rows, ignore_index=True)
@@ -120,6 +131,8 @@ def load_curriculum(
             continue
         clip_code = str(raw_code).zfill(14)
         session = str(row["_session"])
+        run_number = int(row["_run_number"])
+        run_id = f"{session}_run-{run_number:02d}"
         scene_id = str(row["scene_id"])
         level = str(row.get("level", ""))
         outcome = str(row.get("outcome", "failed"))
@@ -166,6 +179,9 @@ def load_curriculum(
                 clip_code=clip_code,
                 subject=subject_id,
                 session=session,
+                run_number=run_number,
+                run_id=run_id,
+                run_index=-1,  # assigned below after the global sort
                 outcome=outcome,
                 phase=phase,
                 level=level,
@@ -176,12 +192,31 @@ def load_curriculum(
     # Sort by clip_code ascending (ordinal — lower = earlier in the session).
     specs.sort(key=lambda s: s.clip_code)
 
+    # Assign chronological run_index by first-encounter order in the sorted list.
+    # Clips sharing a run_id must be contiguous here — clip_code is ordinal
+    # within a run, and runs are time-disjoint by construction (each events
+    # TSV is one fMRI acquisition).
+    run_index_by_id: dict[str, int] = {}
+    last_run_id: str | None = None
+    for spec in specs:
+        if spec.run_id not in run_index_by_id:
+            run_index_by_id[spec.run_id] = len(run_index_by_id)
+        elif last_run_id != spec.run_id:
+            raise ValueError(
+                f"Non-contiguous run_id in chronological order: {spec.run_id} "
+                f"reappears after {last_run_id}. "
+                "Clip codes do not preserve per-run contiguity."
+            )
+        spec.run_index = run_index_by_id[spec.run_id]
+        last_run_id = spec.run_id
+
     logger.info(
         "Loaded %d episodes for %s (%d skipped). "
-        "Unique scenes: %d. Total frames: %d.",
+        "Runs: %d. Unique scenes: %d. Total frames: %d.",
         len(specs),
         subject_id,
         skipped,
+        len(run_index_by_id),
         len({s.scene_id for s in specs}),
         sum(s.max_steps for s in specs),
     )

@@ -61,7 +61,7 @@ class SAC(BaseAgent):
     Args:
         env: A ``ContinualLearningEnv`` instance.
         logger: An :class:`EpochLogger` for recording training statistics.
-        scene_ids: Ordered list of all scene IDs in the benchmark.
+        run_ids: Ordered list of all BIDS run IDs (one per CL task).
         actor_cl: Actor class to instantiate.
         critic_cl: Critic class to instantiate.
         policy_kwargs: Keyword arguments forwarded to actor + critic ctors.
@@ -108,7 +108,7 @@ class SAC(BaseAgent):
         self,
         env,
         logger: EpochLogger,
-        scene_ids: List[str],
+        run_ids: List[str],
         *,
         actor_cl: Type = models.MlpActor,
         critic_cl: Type = models.MlpCritic,
@@ -148,7 +148,7 @@ class SAC(BaseAgent):
         super().__init__(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             agent_name="sac",
             seed=seed,
             log_every=log_every,
@@ -714,6 +714,7 @@ class SAC(BaseAgent):
         truncated: bool,
         one_hot: np.ndarray,
         scene_id: str,
+        run_id: str,
         info: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> None:
@@ -828,19 +829,19 @@ class SAC(BaseAgent):
     # ==================================================================
 
     def on_task_start(
-        self, current_task_idx: int, scene_id: str = ""
+        self, current_task_idx: int, run_id: str = ""
     ) -> None:
         """SAC's task-start log line + forward to attached CL method."""
-        _scene = scene_id or (
-            self.scene_ids[current_task_idx]
-            if current_task_idx < len(self.scene_ids)
+        _run = run_id or (
+            self.run_ids[current_task_idx]
+            if current_task_idx < len(self.run_ids)
             else "?"
         )
         self.logger.log(
-            f"Task start: idx={current_task_idx}  scene={_scene}",
+            f"Task start: idx={current_task_idx}  run={_run}",
             color="white",
         )
-        super().on_task_start(current_task_idx, _scene)
+        super().on_task_start(current_task_idx, _run)
 
     def on_task_end(self, current_task_idx: int) -> None:
         """SAC's task-end log line + forward to attached CL method."""
@@ -848,7 +849,7 @@ class SAC(BaseAgent):
         super().on_task_end(current_task_idx)
 
     def on_task_change(
-        self, new_task_idx: int, new_scene_id: str
+        self, new_task_idx: int, new_run_id: str
     ) -> None:
         """Reset buffers/weights/optimizer + recompile ``learn_on_batch``.
 
@@ -1054,7 +1055,7 @@ class SAC(BaseAgent):
 
     @classmethod
     def from_args(
-        cls, args: argparse.Namespace, env, logger, scene_ids: list
+        cls, args: argparse.Namespace, env, logger, run_ids: list
     ) -> "SAC":
         """Construct a SAC (or subclass) from parsed CLI args."""
         from mariha.replay.buffers import BufferType
@@ -1084,7 +1085,7 @@ class SAC(BaseAgent):
         sac_kwargs = dict(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             policy_kwargs=policy_kwargs,
             seed=getattr(args, "seed", 0),
             log_every=getattr(args, "log_every", 1000),

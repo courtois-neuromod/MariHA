@@ -91,12 +91,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     from mariha.benchmark.config import build_single_scene_context
 
-    env, scene_ids, logger, _ = build_single_scene_context(args)
+    env, run_ids, logger, _ = build_single_scene_context(args)
 
     # ------------------------------------------------------------------
     # Phase 5: instantiate agent + CL method and run
     # ------------------------------------------------------------------
-    agent = agent_cls.from_args(args, env=env, logger=logger, scene_ids=scene_ids)
+    agent = agent_cls.from_args(args, env=env, logger=logger, run_ids=run_ids)
 
     if cl_cls is not None:
         agent.cl_method = cl_cls.from_args(args, agent)

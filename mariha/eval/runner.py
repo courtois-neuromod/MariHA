@@ -49,22 +49,25 @@ def eval_on_scene(
     agent,
     scene_id: str,
     eval_spec,
-    scene_ids: List[str],
+    run_ids: List[str],
     n_episodes: int = 5,
     render_mode: Optional[str] = None,
     scenarios_dir: Path = SCENARIOS_DIR,
+    run_id: Optional[str] = None,
 ) -> Tuple[float, List[Dict]]:
     """Run the greedy policy on a single scene.
 
     Args:
         agent: A :class:`~mariha.benchmark.agent.BenchmarkAgent` instance.
-        scene_id: Scene identifier, e.g. ``'w1l1s0'``.
+        scene_id: Scene identifier, e.g. ``'w1l1s0'``. Drives the emulator.
         eval_spec: An :class:`~mariha.curriculum.episode.EpisodeSpec`
             describing the starting state file and step budget.
-        scene_ids: Canonical ordered list of all scene IDs (for one-hot).
+        run_ids: Canonical ordered list of all run IDs (task one-hot index).
         n_episodes: Number of episodes to run.
         render_mode: Passed through to the env (``None`` = headless).
         scenarios_dir: Directory containing ``scenes_metadata.json``.
+        run_id: Task (run) identifier to tag the eval env with. Defaults to
+            ``eval_spec.run_id`` — the run the clip belongs to.
 
     Returns:
         A tuple ``(mean_return, stats_list)`` where ``stats_list`` is a list
@@ -77,11 +80,14 @@ def eval_on_scene(
             "Run `mariha-generate-scenarios` first."
         )
     exit_point = scene_meta[scene_id]["exit_point"]
+    if run_id is None:
+        run_id = eval_spec.run_id
 
     env = make_scene_env(
         scene_id=scene_id,
         exit_point=exit_point,
-        scene_ids=scene_ids,
+        run_id=run_id,
+        run_ids=run_ids,
         render_mode=render_mode,
         scenarios_dir=scenarios_dir,
     )

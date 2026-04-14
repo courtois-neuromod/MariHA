@@ -49,7 +49,7 @@ class DQN(BaseAgent):
         self,
         env,
         logger: EpochLogger,
-        scene_ids: List[str],
+        run_ids: List[str],
         *,
         seed: int = 0,
         # ---- DQN-specific ----
@@ -87,7 +87,7 @@ class DQN(BaseAgent):
         super().__init__(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             agent_name="dqn",
             seed=seed,
             log_every=log_every,
@@ -415,6 +415,7 @@ class DQN(BaseAgent):
         truncated: bool,
         one_hot: np.ndarray,
         scene_id: str,
+        run_id: str,
         info: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> None:
@@ -485,26 +486,26 @@ class DQN(BaseAgent):
     # ==================================================================
 
     def on_task_start(
-        self, current_task_idx: int, scene_id: str = ""
+        self, current_task_idx: int, run_id: str = ""
     ) -> None:
         """DQN's task-start log line + forward to attached CL method."""
-        _scene = scene_id or (
-            self.scene_ids[current_task_idx]
-            if current_task_idx < len(self.scene_ids)
+        _run = run_id or (
+            self.run_ids[current_task_idx]
+            if current_task_idx < len(self.run_ids)
             else "?"
         )
         self.logger.log(
-            f"Task start: idx={current_task_idx}  scene={_scene}",
+            f"Task start: idx={current_task_idx}  run={_run}",
             color="white",
         )
-        super().on_task_start(current_task_idx, _scene)
+        super().on_task_start(current_task_idx, _run)
 
     def on_task_end(self, current_task_idx: int) -> None:
         """DQN's task-end log line + forward to attached CL method."""
         self.logger.log(f"Task end:   idx={current_task_idx}", color="white")
         super().on_task_end(current_task_idx)
 
-    def on_task_change(self, new_task_idx: int, new_scene_id: str) -> None:
+    def on_task_change(self, new_task_idx: int, new_run_id: str) -> None:
         if self.reset_buffer_on_task_change and self.buffer_mode != "per_scene":
             self._init_replay_buffer()
         if self.reset_optimizer_on_task_change:
@@ -667,7 +668,7 @@ class DQN(BaseAgent):
 
     @classmethod
     def from_args(
-        cls, args: argparse.Namespace, env, logger, scene_ids: list
+        cls, args: argparse.Namespace, env, logger, run_ids: list
     ) -> "DQN":
         from mariha.utils.running import get_readable_timestamp
 
@@ -680,7 +681,7 @@ class DQN(BaseAgent):
         return cls(
             env=env,
             logger=logger,
-            scene_ids=scene_ids,
+            run_ids=run_ids,
             seed=getattr(args, "seed", 0),
             epsilon_start=getattr(args, "epsilon_start", 1.0),
             epsilon_end=getattr(args, "epsilon_end", 0.01),
