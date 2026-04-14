@@ -761,7 +761,7 @@ class SAC(BaseAgent):
                 self.replay_buffer.update_weights(
                     batch["idxs"].numpy(), results["abs_error"].numpy()
                 )
-            self._log_after_update(results)
+            self._log_after_update(results, current_task_idx)
         self.logger.log(
             f"Updated in {time.time() - t_update:.2f}s (step {global_step})"
         )
@@ -770,7 +770,7 @@ class SAC(BaseAgent):
     # Logging hooks
     # ==================================================================
 
-    def _log_after_update(self, results: Dict) -> None:
+    def _log_after_update(self, results: Dict, current_task_idx: int) -> None:
         self.logger.store(
             {
                 "train/q1_vals": results["q1"],
@@ -785,14 +785,22 @@ class SAC(BaseAgent):
             }
         )
         if self.auto_alpha:
-            for task_idx in range(self.num_tasks):
-                self.logger.store(
-                    {
-                        f"train/alpha/{task_idx}": float(
-                            tf.math.exp(self.all_log_alpha[task_idx][0])
-                        )
-                    }
-                )
+            self.logger.store(
+                {
+                    "train/alpha": float(
+                        tf.math.exp(self.all_log_alpha[current_task_idx][0])
+                    )
+                }
+            )
+            self.logger.store(
+                {
+                    f"train/alpha/{task_idx}": float(
+                        tf.math.exp(self.all_log_alpha[task_idx][0])
+                    )
+                    for task_idx in range(self.num_tasks)
+                },
+                display=False,
+            )
 
     def on_episode_end(
         self,
