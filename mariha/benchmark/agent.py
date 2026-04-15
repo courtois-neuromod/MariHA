@@ -123,15 +123,15 @@ class BenchmarkAgent(ABC):
             num_steps: Total environment steps to collect.
         """
 
-    def on_task_start(self, task_idx: int, scene_id: str) -> None:
+    def on_task_start(self, task_idx: int, run_id: str) -> None:
         """Called at the beginning of each new task.
 
         Override to perform task-boundary setup: reset optimizer, snapshot
         parameters (EWC), allocate new heads (multi-head), etc.
 
         Args:
-            task_idx: Index of the new task in ``scene_ids``.
-            scene_id: Scene identifier string (e.g. ``'w1l1s0'``).
+            task_idx: Index of the new task in ``run_ids``.
+            run_id: BIDS run identifier string (e.g. ``'ses-001_run-02'``).
         """
 
     def on_task_end(self, task_idx: int) -> None:
@@ -166,7 +166,7 @@ class BenchmarkAgent(ABC):
         args: argparse.Namespace,
         env,
         logger,
-        scene_ids: list,
+        run_ids: list,
     ) -> "BenchmarkAgent":
         """Construct an agent from parsed CLI args and benchmark context.
 
@@ -174,7 +174,7 @@ class BenchmarkAgent(ABC):
             args: Parsed argparse namespace (benchmark + agent flags).
             env: A ``ContinualLearningEnv`` instance (or compatible env).
             logger: An ``EpochLogger`` instance.
-            scene_ids: Canonical ordered list of all scene IDs.
+            run_ids: Canonical ordered list of all BIDS run IDs.
 
         Returns:
             A fully constructed agent ready to call ``run()`` on.

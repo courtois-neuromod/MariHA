@@ -45,6 +45,7 @@ compose onto any of them through agent-agnostic hooks.
    :caption: User Guide
 
    getting_started
+   glossary
    architecture
    curriculum
    environment

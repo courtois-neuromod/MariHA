@@ -76,7 +76,7 @@ class BaseAgent(BenchmarkAgent):
         self,
         env,
         logger: EpochLogger,
-        scene_ids: List[str],
+        run_ids: List[str],
         *,
         agent_name: str,
         seed: int = 0,
@@ -98,9 +98,10 @@ class BaseAgent(BenchmarkAgent):
                 action and observation spaces must already be populated.
             logger: An :class:`EpochLogger` — used for progress messages
                 and for the standard epoch tabular row.
-            scene_ids: Ordered list of all scene IDs in the benchmark.
-                Defines the one-hot dimension and the mapping from
-                ``scene_id`` strings to integer task indices.
+            run_ids: Ordered list of all BIDS run IDs in the curriculum
+                (one per continual-learning task).  Defines the one-hot
+                dimension and the mapping from ``run_id`` strings to
+                integer task indices.
             agent_name: Short identifier used for checkpoint paths and
                 log messages (e.g. ``"sac"``, ``"ppo"``, ``"dqn"``).
             seed: Global random seed applied to Python, NumPy, TF and
@@ -118,8 +119,8 @@ class BaseAgent(BenchmarkAgent):
 
         self.env = env
         self.logger = logger
-        self.scene_ids = scene_ids
-        self.num_tasks = len(scene_ids)
+        self.run_ids = run_ids
+        self.num_tasks = len(run_ids)
         self.agent_name = agent_name
         self.log_every = int(log_every)
         self.save_freq_epochs = int(save_freq_epochs)
@@ -182,6 +183,7 @@ class BaseAgent(BenchmarkAgent):
         truncated: bool,
         one_hot: np.ndarray,
         scene_id: str,
+        run_id: str,
         info: Dict[str, Any],
         extras: Dict[str, Any],
     ) -> None:
@@ -290,11 +292,11 @@ class BaseAgent(BenchmarkAgent):
     # Optional callbacks — defaults provided
     # ==================================================================
 
-    def on_task_start(self, task_idx: int, scene_id: str) -> None:
+    def on_task_start(self, task_idx: int, run_id: str) -> None:
         """Forward the task-start signal to the attached CL method.
 
         Subclasses that override this for their own logging or setup
-        should call ``super().on_task_start(task_idx, scene_id)`` so the
+        should call ``super().on_task_start(task_idx, run_id)`` so the
         ``cl_method`` hook still fires.  The default implementation
         does nothing else.
         """
@@ -314,11 +316,11 @@ class BaseAgent(BenchmarkAgent):
         if self.cl_method is not None:
             self.cl_method.on_task_end(self, task_idx)
 
-    def on_task_change(self, new_task_idx: int, new_scene_id: str) -> None:
+    def on_task_change(self, new_task_idx: int, new_run_id: str) -> None:
         """Reset agent state at a task boundary.
 
         Called by the runner after ``on_task_start(new_task_idx,
-        new_scene_id)`` — i.e. the agent already knows the new task has
+        new_run_id)`` — i.e. the agent already knows the new task has
         begun.  The default is a no-op.  Agents typically override this
         to:
 

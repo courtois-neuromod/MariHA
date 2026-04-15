@@ -74,6 +74,7 @@ class SyntheticCurriculumEnv:
         info = {
             "task_one_hot": self._one_hot(ep["scene_id"]),
             "scene_id": ep["scene_id"],
+            "run_id": ep.get("run_id", ep["scene_id"]),
             "session": ep.get("session", "sess0"),
             "task_switch": ep.get("task_switch", False) if self._idx > 0 else False,
             "session_switch": ep.get("session_switch", False)
@@ -159,7 +160,7 @@ def test_dqn_run_synthetic_curriculum():
         dqn = DQN(
             env=env,
             logger=logger,
-            scene_ids=["scene0", "scene1"],
+            run_ids=["scene0", "scene1"],
             seed=0,
             replay_size=1000,
             update_after=16,

@@ -19,8 +19,8 @@ events the runner orchestrates, from outermost to innermost, looks like::
     run()
     │
     ├── env.reset()                                  ← initial reset
-    ├── on_task_start(task=0, scene_id)              ← CL hook fires
-    ├── on_task_change(task=0, scene_id)             ← agent-side reset
+    ├── on_task_start(task=0, run_id)                ← CL hook fires
+    ├── on_task_change(task=0, run_id)               ← agent-side reset
     │
     ├── for step in 0..∞:                            ← main loop
     │   │
@@ -43,10 +43,11 @@ events the runner orchestrates, from outermost to innermost, looks like::
     │           obs, info = env.reset()
     │           if info["session_switch"]:
     │               handle_session_boundary(task)    ← per-scene flush
-    │           if info["task_switch"]:
+    │           if info["task_switch"]:               ← new run_id
     │               on_task_end(old_task)            ← CL hook fires
-    │               on_task_start(new_task, scene)   ← CL hook fires
-    │               on_task_change(new_task, scene)  ← agent-side reset
+    │               save_weights(checkpoint_dir)     ← forced per-task ckpt
+    │               on_task_start(new_task, run_id)  ← CL hook fires
+    │               on_task_change(new_task, run_id) ← agent-side reset
     │
     └── on_task_end(final_task)                      ← final flush
         save_weights(checkpoint_dir)                 ← final ckpt
@@ -61,12 +62,15 @@ The five curriculum-level events fire in this order:
    same scene.  Used by per-scene buffer pools to flush pending
    transitions.
 3. **Task switch** (``info["task_switch"] == True``) — fires when the
-   curriculum advances to a new scene.  The CL method's ``on_task_end``
-   hook runs *before* the agent's task-boundary reset (so importance
+   curriculum advances to a new BIDS run (one CL task = one BIDS run;
+   see ``docs/glossary.rst``).  The CL method's ``on_task_end`` hook
+   runs *before* the agent's task-boundary reset (so importance
    estimators, PackNet pruning, and DER/ClonEx episodic memories can
-   still read the just-finished task's replay buffer).  Then
-   ``on_task_start`` and ``on_task_change`` fire with the new task
-   index.
+   still read the just-finished task's replay buffer).  Then a forced
+   per-task checkpoint is written so every run boundary is recoverable,
+   and ``on_task_start`` / ``on_task_change`` fire with the new task
+   index.  Intra-run scene changes are announced via
+   ``info["scene_switch"]`` and emit a log line but no hook dispatch.
 4. **Periodic checkpoint** — written every ``save_freq_epochs`` log
    epochs into ``experiments/checkpoints/{run_label}/{timestamp}_seed{seed}_task{k}/``.
    Multiple writes within the same task overwrite the same directory,
@@ -152,6 +156,7 @@ class TrainingLoopRunner:
 
         # Runtime state — reset at the start of :meth:`run`.
         self._current_task_idx: int = 0
+        self._current_run_id: str = ""
         self._current_scene_id: str = ""
         self._current_session: str = ""
         self._global_step: int = 0
@@ -180,10 +185,11 @@ class TrainingLoopRunner:
 
         one_hot_vec = info["task_one_hot"]
         self._current_scene_id = info.get("scene_id", "")
+        self._current_run_id = info.get("run_id", "")
         self._current_session = info.get("session", "")
         self._current_task_idx = (
-            self.agent.scene_ids.index(self._current_scene_id)
-            if self._current_scene_id in self.agent.scene_ids
+            self.agent.run_ids.index(self._current_run_id)
+            if self._current_run_id in self.agent.run_ids
             else 0
         )
         self._action_counts = {i: 0 for i in range(self.agent.act_dim)}
@@ -196,8 +202,8 @@ class TrainingLoopRunner:
         # Fire lifecycle hooks for the first task.  on_task_change runs
         # after on_task_start so that agents see an already-announced task
         # when they perform any per-task resets (buffer reinit, etc.).
-        self.agent.on_task_start(self._current_task_idx, self._current_scene_id)
-        self.agent.on_task_change(self._current_task_idx, self._current_scene_id)
+        self.agent.on_task_start(self._current_task_idx, self._current_run_id)
+        self.agent.on_task_change(self._current_task_idx, self._current_run_id)
 
         self.logger.log(
             f"{self.agent.agent_name} training started.", color="green"
@@ -228,6 +234,7 @@ class TrainingLoopRunner:
                 truncated=truncated,
                 one_hot=one_hot_vec,
                 scene_id=self._current_scene_id,
+                run_id=self._current_run_id,
                 info=info,
                 extras=extras,
             )
@@ -308,6 +315,7 @@ class TrainingLoopRunner:
 
                 one_hot_vec = info["task_one_hot"]
                 new_scene_id = info.get("scene_id", "")
+                new_run_id = info.get("run_id", "")
                 new_session = info.get("session", "")
 
                 # Session boundary (for per-scene buffer flushes, etc.)
@@ -320,16 +328,26 @@ class TrainingLoopRunner:
                 # order: finish old task, announce new task, reset agent.
                 if info.get("task_switch", False):
                     self.agent.on_task_end(self._current_task_idx)
+                    # Every run boundary is a recoverable checkpoint.
+                    self._save_periodic_checkpoint()
                     new_task_idx = (
-                        self.agent.scene_ids.index(new_scene_id)
-                        if new_scene_id in self.agent.scene_ids
+                        self.agent.run_ids.index(new_run_id)
+                        if new_run_id in self.agent.run_ids
                         else self._current_task_idx
                     )
-                    self.agent.on_task_start(new_task_idx, new_scene_id)
-                    self.agent.on_task_change(new_task_idx, new_scene_id)
+                    self.agent.on_task_start(new_task_idx, new_run_id)
+                    self.agent.on_task_change(new_task_idx, new_run_id)
                     self._current_task_idx = new_task_idx
+                    self._current_run_id = new_run_id
                     self._current_scene_id = new_scene_id
                     self._task_step = 0
+                elif info.get("scene_switch", False):
+                    self.logger.log(
+                        f"[scene] run {new_run_id}: "
+                        f"{self._current_scene_id} -> {new_scene_id}",
+                        color="gray",
+                    )
+                    self._current_scene_id = new_scene_id
 
                 self._current_session = new_session
 

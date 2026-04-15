@@ -222,8 +222,14 @@ class EpochLogger(Logger):
         # terminal display without agents importing the progress module.
         self.progress: Any = None
 
-    def store(self, data: Dict[str, Any]) -> None:
-        """Accumulate scalar values.  ``data`` may contain scalars, arrays, or TF tensors."""
+    def store(self, data: Dict[str, Any], display: bool = True) -> None:
+        """Accumulate scalar values.  ``data`` may contain scalars, arrays, or TF tensors.
+
+        When ``display=False``, values are still written to TSV/TensorBoard/WandB
+        but are not forwarded to the live terminal progress display.  Use for
+        high-cardinality keys (e.g. per-task metrics across many tasks) that
+        would flood the monitor.
+        """
         forwarded: Dict[str, float] = {}
         for k, v in data.items():
             if k not in self._epoch_dict:
@@ -247,7 +253,7 @@ class EpochLogger(Logger):
         # Forward scalar values to the progress tracker (if any).  Only
         # forward scalars — arrays and sequences are meant for TSV/TB
         # aggregation, not single-value display widgets.
-        if self.progress is not None and forwarded:
+        if display and self.progress is not None and forwarded:
             try:
                 self.progress.update_metrics(**forwarded)
             except Exception:

@@ -196,10 +196,10 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
             ``build_benchmark_parser()``.
 
     Returns:
-        A four-tuple ``(env, scene_ids, logger, sequence)`` where:
+        A four-tuple ``(env, run_ids, logger, sequence)`` where:
 
         - ``env`` is a ``ContinualLearningEnv`` instance.
-        - ``scene_ids`` is the canonical ordered list of all scene IDs.
+        - ``run_ids`` is the ordered list of BIDS run IDs (one per task).
         - ``logger`` is an ``EpochLogger`` configured for this run.
         - ``sequence`` is the curriculum ``BaseSequence`` (for burn-in spec
           extraction and other pre-training uses).
@@ -239,6 +239,7 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     # Canonical scene ID ordering (alphabetical, consistent across runs)
     scene_meta = load_metadata(SCENARIOS_DIR)
     scene_ids = sorted(scene_meta.keys())
+    run_ids = sequence.run_ids
 
     # Logger — built before the env so the progress tracker can borrow
     # ``logger.log`` as its fallback output.
@@ -270,7 +271,7 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
         seed=args.seed,
         clip_total=len(sequence),
         total_steps=None,
-        scene_ids=scene_ids,
+        run_ids=run_ids,
     )
     logger.progress = progress
 
@@ -279,12 +280,13 @@ def build_benchmark_context(args: argparse.Namespace) -> Tuple:
     env = ContinualLearningEnv(
         sequence=sequence,
         scene_ids=scene_ids,
+        run_ids=run_ids,
         render_mode=args.render_mode,
         render_speed=args.render_speed,
         progress=progress,
     )
 
-    return env, scene_ids, logger, sequence
+    return env, run_ids, logger, sequence
 
 
 def build_single_scene_parser() -> argparse.ArgumentParser:
@@ -333,7 +335,7 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
             agent-specific flags added downstream).
 
     Returns:
-        A four-tuple ``(env, scene_ids, logger, sequence)`` matching the shape
+        A four-tuple ``(env, run_ids, logger, sequence)`` matching the shape
         returned by ``build_benchmark_context`` so the same agent constructor
         path works in both modes.
 
@@ -381,6 +383,8 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
         )
         sys.exit(1)
 
+    run_ids = sorted({s.run_id for s in scene_specs})
+
     # Cycle the specs forever; StepBudgetCLEnv stops at args.total_steps.
     spec_cycle = itertools.cycle(scene_specs)
 
@@ -412,17 +416,18 @@ def build_single_scene_context(args: argparse.Namespace) -> Tuple:
         seed=args.seed,
         clip_total=len(scene_specs),
         total_steps=args.total_steps,
-        scene_ids=scene_ids,
+        run_ids=run_ids,
     )
     logger.progress = progress
 
     env = StepBudgetCLEnv(
         sequence=spec_cycle,
         scene_ids=scene_ids,
+        run_ids=run_ids,
         max_steps=args.total_steps,
         render_mode=args.render_mode,
         render_speed=args.render_speed,
         progress=progress,
     )
 
-    return env, scene_ids, logger, scene_specs
+    return env, run_ids, logger, scene_specs

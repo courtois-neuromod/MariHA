@@ -195,33 +195,36 @@ class TaskIdWrapper:
     """Normalize pixel observations and expose the task one-hot vector in info.
 
     The pixel observation ``(H, W, C)`` is normalized to ``[0, 1]`` float32
-    and returned as-is (shape preserved).  The one-hot task vector is placed
-    in ``info['task_one_hot']`` so the SAC agent can pass it separately to
-    the actor/critic networks, matching the COOM two-input convention.
+    and returned as-is (shape preserved). The one-hot task vector is placed
+    in ``info['task_one_hot']`` so the agent can pass it separately to the
+    actor/critic networks, matching the COOM two-input convention.
+
+    Under the task=BIDS-run model, one-hot dimension = ``len(run_ids)`` and
+    the active index is ``run_ids.index(run_id)``.
 
     Args:
         env: The environment to wrap (output of ``FrameStackWrapper``).
-        scene_id: The current scene identifier (e.g. ``'w1l1s0'``).
-        scene_ids: Ordered list of all scene IDs defining the one-hot index.
+        run_id: The current run identifier (e.g. ``'ses-001_run-02'``).
+        run_ids: Ordered list of all run IDs defining the one-hot index.
             Must be consistent across all calls (same ordering).
     """
 
     def __init__(
         self,
         env: Any,
-        scene_id: str,
-        scene_ids: list[str],
+        run_id: str,
+        run_ids: list[str],
     ) -> None:
         self._env = env
-        self._scene_id = scene_id
-        self._scene_ids = scene_ids
-        self._num_tasks = len(scene_ids)
+        self._run_id = run_id
+        self._run_ids = run_ids
+        self._num_tasks = len(run_ids)
 
-        if scene_id not in scene_ids:
+        if run_id not in run_ids:
             raise ValueError(
-                f"scene_id '{scene_id}' not found in scene_ids list."
+                f"run_id '{run_id}' not found in run_ids list."
             )
-        self._task_idx = scene_ids.index(scene_id)
+        self._task_idx = run_ids.index(run_id)
 
         # Normalized pixel observation — same shape as incoming frame stack.
         h, w, c = env.observation_space.shape
@@ -252,21 +255,21 @@ class TaskIdWrapper:
     def unwrapped(self):
         return self._env.unwrapped
 
-    def set_scene_id(self, scene_id: str) -> None:
-        """Update the active scene ID (called by ``ContinualLearningEnv`` on task switch).
+    def set_run_id(self, run_id: str) -> None:
+        """Update the active run ID (called by ``ContinualLearningEnv`` on task switch).
 
         Args:
-            scene_id: New scene identifier.
+            run_id: New run identifier.
 
         Raises:
-            ValueError: If ``scene_id`` is not in the known scene list.
+            ValueError: If ``run_id`` is not in the known run list.
         """
-        if scene_id not in self._scene_ids:
+        if run_id not in self._run_ids:
             raise ValueError(
-                f"scene_id '{scene_id}' not found in scene_ids list."
+                f"run_id '{run_id}' not found in run_ids list."
             )
-        self._scene_id = scene_id
-        self._task_idx = self._scene_ids.index(scene_id)
+        self._run_id = run_id
+        self._task_idx = self._run_ids.index(run_id)
 
     def _normalize(self, frame_stack: np.ndarray) -> np.ndarray:
         return frame_stack.astype(np.float32) / 255.0
