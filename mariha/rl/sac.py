@@ -1010,7 +1010,7 @@ class SAC(BaseAgent):
 
         # Network architecture
         parser.add_argument(
-            "--hidden_sizes", type=int, nargs="+", default=[256, 256]
+            "--hidden_sizes", type=int, nargs="*", default=[]
         )
         parser.add_argument(
             "--activation",
@@ -1074,7 +1074,7 @@ class SAC(BaseAgent):
 
         activation = get_activation_from_str(getattr(args, "activation", "tanh"))
         policy_kwargs = dict(
-            hidden_sizes=tuple(getattr(args, "hidden_sizes", [256, 256])),
+            hidden_sizes=tuple(getattr(args, "hidden_sizes", [])),
             activation=activation,
             use_layer_norm=getattr(args, "use_layer_norm", False),
             num_heads=getattr(args, "num_heads", 1),

@@ -87,7 +87,7 @@ def build_eval_parser() -> argparse.ArgumentParser:
         help="Evaluate only the first N checkpoints, ordered by run_index (debug).",
     )
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--hidden_sizes", nargs="+", type=int, default=[256, 256])
+    p.add_argument("--hidden_sizes", nargs="*", type=int, default=[])
     p.add_argument("--activation", default="tanh")
     p.add_argument("--use_layer_norm", action="store_true")
     p.add_argument("--num_heads", type=int, default=1)

@@ -71,7 +71,6 @@ class PPO(BaseAgent):
         reset_optimizer_on_task_change: bool = False,
         reset_network_on_task_change: bool = False,
         # ---- architecture ----
-        hidden_size: int = 512,
         hide_task_id: bool = False,
         # ---- BaseAgent / logging ----
         log_every: int = 1000,
@@ -107,7 +106,6 @@ class PPO(BaseAgent):
         self.reset_optimizer_on_task_change = reset_optimizer_on_task_change
         self.reset_network_on_task_change = reset_network_on_task_change
 
-        self.hidden_size = int(hidden_size)
         self.hide_task_id = hide_task_id
 
         # ---- networks + optimizer + rollout buffer ----
@@ -145,7 +143,6 @@ class PPO(BaseAgent):
             state_space=self.env.observation_space,
             action_space=self.env.action_space,
             num_tasks=self.num_tasks,
-            hidden_size=self.hidden_size,
             hide_task_id=self.hide_task_id,
         )
 
@@ -575,7 +572,6 @@ class PPO(BaseAgent):
         parser.add_argument("--vf_coef", type=float, default=1.0)
         parser.add_argument("--ent_coef", type=float, default=0.01)
         parser.add_argument("--max_grad_norm", type=float, default=0.5)
-        parser.add_argument("--hidden_size", type=int, default=512)
         parser.add_argument("--hide_task_id", type=str2bool, default=False)
         parser.add_argument(
             "--reset_optimizer_on_task_change", type=str2bool, default=False
@@ -628,7 +624,6 @@ class PPO(BaseAgent):
             reset_network_on_task_change=getattr(
                 args, "reset_network_on_task_change", False
             ),
-            hidden_size=getattr(args, "hidden_size", 512),
             hide_task_id=getattr(args, "hide_task_id", False),
             experiment_dir=experiment_dir,
             timestamp=timestamp,

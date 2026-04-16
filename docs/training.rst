@@ -38,30 +38,35 @@ averaging, and an optional Double-DQN target formulation
 Model architecture
 ------------------
 
-SAC's actor and critic both share the standard CNN + MLP trunk:
+All agents share the same convolutional backbone
+(:class:`~mariha.rl.models.BaseCNN`, ported from the ``ppo_study``
+reference).  Algorithm-specific heads sit on top of its 512-d output:
 
 .. code-block:: text
 
-   obs (84,84,4) ──► Conv(32, 8×8, stride 4)
-                     Conv(64, 4×4, stride 2)
-                     Conv(64, 3×3, stride 1)
-                     Flatten  ──► (3136,)
+   obs (84,84,4) ──► Conv(32, 3×3, stride 2, 'same')  ┐
+                     Conv(32, 3×3, stride 2, 'same')  │  BaseCNN
+                     Conv(32, 3×3, stride 2, 'same')  │  (ReLU + orthogonal)
+                     Conv(32, 3×3, stride 2, 'same')  │
+                     Flatten → Dense(512) ────────────┘
                             │
    task_one_hot ────────────┤  Concatenate
                             │
-                     Dense(256) → activation
-                     Dense(256) → activation
+                     (optional extra Dense layers via --hidden_sizes)
                             │
-                     head: Dense(9 × num_heads)
+                     SAC:  Dense(9 × num_heads)  — actor logits / Q-values
+                     DQN:  Dense(9 × num_heads)  — Q-values
+                     PPO:  Dense(9), Dense(1)    — logits + value
 
-PPO uses a shared-trunk variant (:class:`~mariha.rl.models.PPOActorCritic`)
-with separate policy and value heads after the dense trunk; DQN uses a
-single Q-network with the same conv stack.
+SAC/DQN default to ``hidden_sizes=()`` (no extra dense layers beyond the
+shared trunk), giving all three agents the same parameter count up to
+the heads.  Pass ``--hidden_sizes 256 256`` explicitly to add post-trunk
+capacity.
 
-The CNN and dense trunk are the **common variables** — shared across
-tasks and the natural target of regularisation-based CL methods.
-Task-specific heads (when ``num_heads > 1``) are excluded from
-regularisation by design.
+The backbone and any extra dense layers are the **common variables** —
+shared across tasks and the natural target of regularisation-based CL
+methods.  Task-specific heads (when ``num_heads > 1``) are excluded
+from regularisation by design.
 
 Episode-driven training loop
 -----------------------------
