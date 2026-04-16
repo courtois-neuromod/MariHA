@@ -182,13 +182,16 @@ step).  They additionally implement three agent-agnostic CL hooks:
        additionally consumes ``"critic1_q"``/``"critic2_q"`` (SAC) or
        ``"value"`` (PPO).
 
-The :class:`~mariha.rl.models.MlpActor` and
+All agents share the same convolutional backbone
+(:class:`~mariha.rl.models.BaseCNN`, ported from the ``ppo_study``
+reference): 4× Conv2D(32, 3×3, stride=2, 'same', ReLU, orthogonal init)
+→ Flatten → Dense(512, ReLU, orthogonal init).  The
+:class:`~mariha.rl.models.MlpActor` and
 :class:`~mariha.rl.models.MlpCritic` accept ``(obs, task_one_hot)`` as
-separate inputs.  The CNN head (32→64→64 filters, Atari strides)
-processes the pixel stack; its output is concatenated with the task
-one-hot before the dense trunk.  PPO uses
-:class:`~mariha.rl.models.PPOActorCritic`, which shares the conv trunk
-between policy and value heads.
+separate inputs; the task one-hot is concatenated to the 512-d backbone
+output before the per-algorithm heads.  PPO uses
+:class:`~mariha.rl.models.PPOActorCritic`, which wraps the same
+backbone with separate policy and value heads.
 
 ``mariha.methods``
 ~~~~~~~~~~~~~~~~~~

@@ -74,7 +74,7 @@ class DQN(BaseAgent):
         reset_optimizer_on_task_change: bool = False,
         reset_network_on_task_change: bool = False,
         # ---- architecture ----
-        hidden_sizes: Tuple[int, ...] = (256, 256),
+        hidden_sizes: Tuple[int, ...] = (),
         hide_task_id: bool = False,
         # ---- BaseAgent / logging ----
         log_every: int = 1000,
@@ -639,7 +639,7 @@ class DQN(BaseAgent):
         parser.add_argument("--update_every", type=int, default=4)
         parser.add_argument("--n_updates", type=int, default=1)
         parser.add_argument(
-            "--hidden_sizes", type=int, nargs="+", default=[256, 256]
+            "--hidden_sizes", type=int, nargs="*", default=[]
         )
         parser.add_argument("--hide_task_id", type=str2bool, default=False)
         parser.add_argument(
@@ -708,7 +708,7 @@ class DQN(BaseAgent):
             reset_network_on_task_change=getattr(
                 args, "reset_network_on_task_change", False
             ),
-            hidden_sizes=tuple(getattr(args, "hidden_sizes", [256, 256])),
+            hidden_sizes=tuple(getattr(args, "hidden_sizes", [])),
             hide_task_id=getattr(args, "hide_task_id", False),
             log_every=getattr(args, "log_every", 1000),
             save_freq_epochs=getattr(args, "save_freq_epochs", 25),

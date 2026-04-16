@@ -1,23 +1,26 @@
 """Neural network architectures for MariHA RL agents.
 
-Architectures
--------------
-**SAC** (from COOM):
-    Atari-style CNN (32×8×4 → 64×4×2 → 64×3×1 → Flatten) + task one-hot +
-    two dense layers.
+All agents share a common convolutional backbone (:class:`BaseCNN`) ported
+from the ``ppo_study`` reference:
 
-    - ``MlpActor``  — Stochastic discrete-action policy (returns logits).
-    - ``MlpCritic`` — Q-value network (returns Q(s,a) for all actions).
+    4× Conv2D(32, 3×3, stride=2, padding='same', ReLU, orthogonal init)
+    → Flatten → Dense(512, ReLU, orthogonal init).
 
-**PPO** (from ppo_study reference):
-    4× Conv2D(32, 3×3, stride=2, padding='same') → Dense(512) with orthogonal
-    initialisation.  Shared backbone, separate actor (logits) and critic (value)
-    heads.
+Algorithm-specific components sit on top of this shared trunk:
 
-    - ``PPOActorCritic`` — Combined actor-critic for PPO.
+**SAC**
+    :class:`MlpActor` (action logits) and :class:`MlpCritic` (Q-values for
+    all actions) share :class:`BaseCNN`, concatenate the task one-hot to
+    its 512-d output, optionally apply additional dense layers, then
+    produce per-action outputs.
 
-**DQN**:
-    Reuses ``MlpCritic`` from SAC (same architecture works for DQN Q-values).
+**PPO**
+    :class:`PPOActorCritic` wraps :class:`BaseCNN` with separate actor
+    (logits) and critic (scalar value) heads; task one-hot concatenated
+    after the backbone.
+
+**DQN**
+    Reuses :class:`MlpCritic` as its Q-network.
 """
 
 from __future__ import annotations
@@ -46,37 +49,74 @@ TimeDistributed = _keras.layers.TimeDistributed
 
 
 # ---------------------------------------------------------------------------
-# CNN feature extractor
+# Shared CNN backbone (used by all agents)
 # ---------------------------------------------------------------------------
 
 
-def build_conv_head(conv_in: tf.Tensor, use_lstm: bool = False) -> tf.Tensor:
-    """Build the Atari-style convolutional feature extractor.
+BACKBONE_DIM = 512
 
-    Architecture: 32×8×4 → 64×4×2 → 64×3×1 → Flatten (→ 3136 units).
-    With ``use_lstm=True``, the spatial features are fed through an LSTM(512)
-    instead of a simple Flatten.
+
+class BaseCNN(_keras.Model):
+    """Shared convolutional backbone for all MariHA agents.
+
+    Architecture (from ``ppo_study/src/models.py::BaseModel``):
+
+        4× Conv2D(32, 3×3, stride=2, padding='same', ReLU, orthogonal)
+        → Flatten → Dense(512, ReLU, orthogonal).
+
+    With ``use_lstm=True`` the convs are wrapped in ``TimeDistributed`` and
+    the ``Flatten → Dense(512)`` projection is replaced by an
+    ``LSTM(512, tanh)``.  The input is then expected to carry a leading
+    time axis.
+
+    Output shape: ``(batch, 512)``.
 
     Args:
-        conv_in: Keras tensor with shape ``(H, W, C)`` (input to the network).
-        use_lstm: If ``True``, wrap each conv layer with ``TimeDistributed``
-            and pool with LSTM.  Expects the leading dimension to be the time
-            axis in that case.
-
-    Returns:
-        A Keras tensor with shape ``(batch, features)``.
+        state_shape: Observation shape, e.g. ``(84, 84, 4)``.
+        use_lstm: If ``True``, build the recurrent variant.
     """
-    for filters, kernel, stride in zip((32, 64, 64), (8, 4, 3), (4, 2, 1)):
-        conv_layer = Conv2D(filters, kernel, stride, activation="relu")
-        conv_in = (
-            TimeDistributed(conv_layer)(conv_in) if use_lstm else conv_layer(conv_in)
-        )
-    if use_lstm:
-        conv_in = TimeDistributed(Flatten())(conv_in)
-        conv_in = LSTM(512, activation="tanh")(conv_in)
-    else:
-        conv_in = Flatten()(conv_in)
-    return conv_in
+
+    def __init__(
+        self,
+        state_shape: Tuple[int, ...],
+        use_lstm: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        init = _keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
+        conv_layers = [
+            Conv2D(
+                32, 3, strides=2, padding="same", activation="relu",
+                kernel_initializer=init, bias_initializer="zeros",
+                name=f"conv{i + 1}",
+            )
+            for i in range(4)
+        ]
+        if use_lstm:
+            self.convs = [TimeDistributed(c) for c in conv_layers]
+            self.pool = TimeDistributed(Flatten())
+            self.projection = LSTM(BACKBONE_DIM, activation="tanh", name="lstm_proj")
+        else:
+            self.convs = conv_layers
+            self.pool = Flatten()
+            self.projection = Dense(
+                BACKBONE_DIM, activation="relu",
+                kernel_initializer=init, bias_initializer="zeros",
+                name="dense_proj",
+            )
+        self.output_dim = BACKBONE_DIM
+
+    def call(self, obs: tf.Tensor) -> tf.Tensor:
+        x = obs
+        for conv in self.convs:
+            x = conv(x)
+        x = self.pool(x)
+        return self.projection(x)
+
+
+# ---------------------------------------------------------------------------
+# Shared CNN + optional dense trunk (functional builder for SAC / DQN)
+# ---------------------------------------------------------------------------
 
 
 def mlp(
@@ -88,39 +128,55 @@ def mlp(
     use_lstm: bool = False,
     hide_task_id: bool = False,
 ) -> Model:
-    """Build a shared CNN + MLP trunk that accepts ``(obs, task_id)`` inputs.
+    """Build ``BaseCNN`` + optional post-trunk MLP, accepting ``(obs, task_id)``.
+
+    The backbone produces a 512-d feature vector.  The task one-hot is
+    concatenated to it (unless ``hide_task_id``), then any additional
+    dense layers from ``hidden_sizes`` are applied.  With
+    ``hidden_sizes=()`` the trunk output is returned directly.
 
     Args:
         state_shape: Observation shape, e.g. ``(84, 84, 4)``.
         num_tasks: Length of the one-hot task vector.
-        hidden_sizes: Sequence of dense-layer widths after the CNN.
-        activation: Activation function for hidden layers.
+        hidden_sizes: Extra dense-layer widths applied *after* the shared
+            512 trunk.  Default is ``()`` — no extra layers.
+        activation: Activation for the extra dense layers.
         use_layer_norm: If ``True``, apply ``LayerNormalization`` + ``tanh``
-            after the first dense layer.
-        use_lstm: Forward to ``build_conv_head``.
-        hide_task_id: If ``True``, the task one-hot is not concatenated to
-            the CNN features (useful for ablations).
+            after the first extra dense layer.
+        use_lstm: Forward to :class:`BaseCNN`.
+        hide_task_id: If ``True``, the task one-hot is not concatenated.
 
     Returns:
         A Keras ``Model`` with inputs ``[obs, task_id]`` (or just ``obs``
-        when ``hide_task_id=True``) and output of size ``hidden_sizes[-1]``.
+        when ``hide_task_id=True``).
     """
     task_input = Input(shape=(num_tasks,), name="task_input", dtype=tf.float32)
     conv_in = Input(shape=state_shape, name="conv_head_in")
-    conv_head = build_conv_head(conv_in, use_lstm)
+    backbone = BaseCNN(state_shape, use_lstm=use_lstm)
+    features = backbone(conv_in)
 
-    model = conv_head if hide_task_id else Concatenate()([conv_head, task_input])
-    model = Dense(hidden_sizes[0])(model)
-    if use_layer_norm:
-        model = LayerNormalization()(model)
-        model = Activation(tf.nn.tanh)(model)
-    else:
-        model = Activation(activation)(model)
-    for size in list(hidden_sizes)[1:]:
-        model = Dense(size, activation=activation)(model)
+    out = features if hide_task_id else Concatenate()([features, task_input])
+
+    hidden_sizes = tuple(hidden_sizes)
+    if hidden_sizes:
+        out = Dense(hidden_sizes[0])(out)
+        if use_layer_norm:
+            out = LayerNormalization()(out)
+            out = Activation(tf.nn.tanh)(out)
+        else:
+            out = Activation(activation)(out)
+        for size in hidden_sizes[1:]:
+            out = Dense(size, activation=activation)(out)
 
     inputs = conv_in if hide_task_id else [conv_in, task_input]
-    return Model(inputs=inputs, outputs=model)
+    return Model(inputs=inputs, outputs=out)
+
+
+def _trunk_output_dim(num_tasks: int, hidden_sizes: Tuple[int, ...], hide_task_id: bool) -> int:
+    """Width of the tensor feeding the per-algorithm heads."""
+    if hidden_sizes:
+        return hidden_sizes[-1]
+    return BACKBONE_DIM if hide_task_id else BACKBONE_DIM + num_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +217,14 @@ class MlpActor(_keras.Model):
         state_space: Observation space (``gymnasium.spaces.Box``).
         action_space: Action space (``gymnasium.spaces.Discrete``).
         num_tasks: Number of tasks (one-hot dimension).
-        hidden_sizes: Dense-layer widths after the CNN.
-        activation: Hidden-layer activation function.
-        use_layer_norm: Apply layer normalisation after the first dense layer.
-        use_lstm: Use LSTM pooling in the CNN head.
+        hidden_sizes: Extra dense-layer widths after the shared 512 trunk.
+            Default ``()`` — strict alignment with PPO.
+        activation: Activation for the extra dense layers.
+        use_layer_norm: Apply layer normalisation after the first extra
+            dense layer.
+        use_lstm: Use LSTM pooling in the shared backbone.
         num_heads: Number of output heads (1 = shared head, >1 = multi-head).
-        hide_task_id: Do not concatenate the task one-hot to CNN features.
+        hide_task_id: Do not concatenate the task one-hot to backbone features.
     """
 
     def __init__(
@@ -174,7 +232,7 @@ class MlpActor(_keras.Model):
         state_space: gymnasium.spaces.Box,
         action_space: gymnasium.spaces.Discrete,
         num_tasks: int,
-        hidden_sizes: Tuple[int, ...] = (256, 256),
+        hidden_sizes: Tuple[int, ...] = (),
         activation: Callable = tf.tanh,
         use_layer_norm: bool = False,
         use_lstm: bool = False,
@@ -185,6 +243,7 @@ class MlpActor(_keras.Model):
         self.num_heads = num_heads
         self.hide_task_id = hide_task_id
 
+        hidden_sizes = tuple(hidden_sizes)
         self.core = mlp(
             state_space.shape,
             num_tasks,
@@ -194,8 +253,9 @@ class MlpActor(_keras.Model):
             use_lstm,
             hide_task_id,
         )
+        head_in = _trunk_output_dim(num_tasks, hidden_sizes, hide_task_id)
         self.head_mu = Sequential(
-            [Input(shape=(hidden_sizes[-1],)), Dense(action_space.n * num_heads)]
+            [Input(shape=(head_in,)), Dense(action_space.n * num_heads)]
         )
         self.action_space = action_space
 
@@ -234,19 +294,20 @@ class MlpCritic(_keras.Model):
     """Q-value network for discrete actions.
 
     Returns Q(s, a) for all actions simultaneously as a vector of length
-    ``n_actions``.  The SAC update takes the expected Q-value using the
-    current policy probabilities.
+    ``n_actions``.  Used as the SAC critic and the DQN Q-network.
 
     Args:
         state_space: Observation space.
         action_space: Action space.
         num_tasks: Number of tasks (one-hot dimension).
-        hidden_sizes: Dense-layer widths after the CNN.
-        activation: Hidden-layer activation function.
-        use_layer_norm: Apply layer normalisation after the first dense layer.
-        use_lstm: Use LSTM pooling in the CNN head.
+        hidden_sizes: Extra dense-layer widths after the shared 512 trunk.
+            Default ``()`` — strict alignment with PPO.
+        activation: Activation for the extra dense layers.
+        use_layer_norm: Apply layer normalisation after the first extra
+            dense layer.
+        use_lstm: Use LSTM pooling in the shared backbone.
         num_heads: Number of output heads.
-        hide_task_id: Do not concatenate the task one-hot to CNN features.
+        hide_task_id: Do not concatenate the task one-hot to backbone features.
     """
 
     def __init__(
@@ -254,7 +315,7 @@ class MlpCritic(_keras.Model):
         state_space: gymnasium.spaces.Box,
         action_space: gymnasium.spaces.Discrete,
         num_tasks: int,
-        hidden_sizes: Iterable[int] = (256, 256),
+        hidden_sizes: Iterable[int] = (),
         activation: Callable = tf.tanh,
         use_layer_norm: bool = False,
         use_lstm: bool = False,
@@ -265,6 +326,7 @@ class MlpCritic(_keras.Model):
         self.hide_task_id = hide_task_id
         self.num_heads = num_heads
 
+        hidden_sizes = tuple(hidden_sizes)
         self.core = mlp(
             state_space.shape,
             num_tasks,
@@ -274,8 +336,9 @@ class MlpCritic(_keras.Model):
             use_lstm,
             hide_task_id,
         )
+        head_in = _trunk_output_dim(num_tasks, hidden_sizes, hide_task_id)
         self.head = Sequential(
-            [Input(shape=(hidden_sizes[-1],)), Dense(num_heads * action_space.n)]
+            [Input(shape=(head_in,)), Dense(num_heads * action_space.n)]
         )
 
     def call(self, obs: tf.Tensor, one_hot_task_id: tf.Tensor) -> tf.Tensor:
@@ -305,56 +368,21 @@ class MlpCritic(_keras.Model):
 
 
 # ---------------------------------------------------------------------------
-# PPO actor-critic (from ppo_study reference)
+# PPO actor-critic
 # ---------------------------------------------------------------------------
-
-
-def _orthogonal_init(shape, dtype=None):
-    """Orthogonal initialiser scaled by ``sqrt(2)`` (ReLU gain)."""
-    return _keras.initializers.Orthogonal(gain=tf.sqrt(2.0))(shape, dtype=dtype)
-
-
-def build_ppo_conv_head(state_shape: Tuple[int, ...]) -> Model:
-    """Build the ppo_study CNN backbone: 4× Conv2D(32, 3×3, stride=2, same).
-
-    Architecture reproduces ``ppo_study/src/models.py::BaseModel``:
-    4 conv layers (32 filters, 3×3 kernel, stride 2, 'same' padding)
-    followed by a Dense(512) projection.  All layers use orthogonal
-    initialisation with ReLU gain.
-
-    Args:
-        state_shape: Observation shape, e.g. ``(84, 84, 4)``.
-
-    Returns:
-        A Keras ``Model`` mapping ``(batch, H, W, C)`` → ``(batch, 512)``.
-    """
-    init = _keras.initializers.Orthogonal(gain=tf.sqrt(2.0))
-    inp = Input(shape=state_shape, name="ppo_obs_in")
-    x = inp
-    for _ in range(4):
-        x = Conv2D(32, 3, strides=2, padding="same",
-                    activation="relu", kernel_initializer=init,
-                    bias_initializer="zeros")(x)
-    x = Flatten()(x)
-    x = Dense(512, activation="relu", kernel_initializer=init,
-              bias_initializer="zeros")(x)
-    return Model(inputs=inp, outputs=x, name="ppo_conv_head")
 
 
 class PPOActorCritic(_keras.Model):
     """Shared-backbone actor-critic for PPO.
 
-    Architecture from ``ppo_study``: 4× Conv2D(32) backbone → Dense(512) →
-    separate actor (logits) and critic (scalar value) heads.
-
-    Optionally concatenates a one-hot task vector to the backbone output
-    before the heads (set ``hide_task_id=False``).
+    Wraps :class:`BaseCNN` with separate actor (logits) and critic
+    (scalar value) heads.  Optionally concatenates a one-hot task vector
+    to the backbone output before the heads.
 
     Args:
         state_space: Observation space.
         action_space: Discrete action space.
         num_tasks: Length of the one-hot task vector.
-        hidden_size: Backbone output dimension (default 512).
         hide_task_id: If ``True``, don't use the task one-hot.
     """
 
@@ -363,16 +391,15 @@ class PPOActorCritic(_keras.Model):
         state_space: "gymnasium.spaces.Box",
         action_space: "gymnasium.spaces.Discrete",
         num_tasks: int,
-        hidden_size: int = 512,
         hide_task_id: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
         self.hide_task_id = hide_task_id
         self.num_tasks = num_tasks
-        self.backbone = build_ppo_conv_head(state_space.shape)
+        self.backbone = BaseCNN(state_space.shape)
         init = _keras.initializers.Orthogonal(gain=1.0)
-        head_in = hidden_size if hide_task_id else hidden_size + num_tasks
+        head_in = BACKBONE_DIM if hide_task_id else BACKBONE_DIM + num_tasks
         self.actor_head = Dense(action_space.n, kernel_initializer=init,
                                 bias_initializer="zeros", name="actor_logits")
         self.critic_head = Dense(1, kernel_initializer=init,
