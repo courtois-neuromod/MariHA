@@ -63,7 +63,16 @@ info "Upgrading pip..."
 "$PIP_VENV" install --upgrade pip --quiet
 
 info "Installing mariha and dependencies (this may take a few minutes)..."
-"$PIP_VENV" install -e ".[dev]" --quiet
+# opencv-python-headless is blocked on Compute Canada — their module provides it.
+# Install all other deps from pyproject.toml, then install the package itself without deps.
+"$PYTHON_VENV" -c "
+import tomllib
+with open('pyproject.toml', 'rb') as f:
+    d = tomllib.load(f)
+deps = [x for x in d['project']['dependencies'] if 'opencv' not in x.lower()]
+print('\n'.join(deps))
+" | "$PIP_VENV" install -r /dev/stdin --quiet
+"$PIP_VENV" install -e ".[dev]" --no-deps --quiet
 success "Package installed."
 
 info "Installing tensorflow[and-cuda] for GPU support..."
