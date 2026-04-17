@@ -75,3 +75,6 @@ dmypy.json
 
 # Logs
 *.log
+
+# SLURM / HPC scripts (local only)
+scripts/narval_*.sh
