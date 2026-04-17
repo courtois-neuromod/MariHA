@@ -63,15 +63,24 @@ info "Upgrading pip..."
 "$PIP_VENV" install --upgrade pip --quiet
 
 info "Installing mariha and dependencies (this may take a few minutes)..."
-# opencv-python-headless is blocked on Compute Canada — their module provides it.
-# Install all other deps from pyproject.toml, then install the package itself without deps.
+# opencv and stable-retro need special handling on Compute Canada:
+# - opencv-python-headless: blocked, provided by the opencv module
+# - stable-retro: must be built from source; cmake needs the real Python prefix
+#   (not the venv) to find libpython correctly
 "$PYTHON_VENV" -c "
 import tomllib
 with open('pyproject.toml', 'rb') as f:
     d = tomllib.load(f)
-deps = [x for x in d['project']['dependencies'] if 'opencv' not in x.lower()]
+skip = ('opencv', 'stable-retro')
+deps = [x for x in d['project']['dependencies'] if not any(s in x.lower() for s in skip)]
 print('\n'.join(deps))
 " | "$PIP_VENV" install -r /dev/stdin --quiet
+
+info "Building stable-retro (this takes a few minutes)..."
+PYTHON_REAL_PREFIX=$("$PYTHON_VENV" -c "import sys; print(getattr(sys, 'real_prefix', sys.base_prefix))")
+CMAKE_ARGS="-DPython_ROOT_DIR=${PYTHON_REAL_PREFIX}" "$PIP_VENV" install stable-retro --quiet
+success "stable-retro built."
+
 "$PIP_VENV" install -e ".[dev]" --no-deps --quiet
 success "Package installed."
 
