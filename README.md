@@ -222,7 +222,7 @@ MariHA extends COOM with:
 
 ---
 
-## Running on Compute Canada (Narval / Béluga)
+## Running on Compute Canada (Narval)
 
 MariHA uses `stable-retro` and a specific cuDNN version that cannot be installed
 via Compute Canada's module system. The recommended approach is to run inside an
