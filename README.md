@@ -222,6 +222,67 @@ MariHA extends COOM with:
 
 ---
 
+## Running on Compute Canada (Narval / Béluga)
+
+MariHA uses `stable-retro` and a specific cuDNN version that cannot be installed
+via Compute Canada's module system. The recommended approach is to run inside an
+**Apptainer container** that bundles all dependencies.
+
+### One-time setup
+
+**1. Pull the pre-built image** (on a login node):
+
+```bash
+module load StdEnv/2023 apptainer/1.4.5
+export APPTAINER_CACHEDIR=$SCRATCH/.apptainer_cache
+apptainer pull --dir $SCRATCH docker://cleode5a7/mariha-gpu:latest
+mv $SCRATCH/mariha-gpu_latest.sif $SCRATCH/mariha-gpu.sif
+```
+
+**2. Clone the repo and pull data**:
+
+```bash
+cd $SCRATCH
+git clone <repo-url> MariHA
+cd MariHA/data/mario.scenes && git annex get sub-*/
+```
+
+### Submit a training job
+
+Edit `scripts/narval_test_sac_cl.sh` with your SLURM account, then:
+
+```bash
+mkdir -p $SCRATCH/MariHA/logs
+sbatch scripts/narval_test_sac_cl.sh
+```
+
+The SLURM script uses `apptainer exec --nv` to pass the GPU through to the
+container. No `module load cuda` or `module load python` needed.
+
+### Rebuilding the image
+
+If you need to rebuild (e.g. after adding a dependency):
+
+```bash
+# On your local Linux machine
+docker build -t mariha-gpu .
+docker tag mariha-gpu cleode5a7/mariha-gpu
+docker push cleode5a7/mariha-gpu
+
+# On Narval: re-pull
+rm $SCRATCH/mariha-gpu.sif
+export APPTAINER_CACHEDIR=$SCRATCH/.apptainer_cache
+apptainer pull --dir $SCRATCH docker://cleode5a7/mariha-gpu:latest
+mv $SCRATCH/mariha-gpu_latest.sif $SCRATCH/mariha-gpu.sif
+```
+
+The `Dockerfile` is at the repo root. Key design choices:
+- Base image: `nvidia/cuda:12.5.1-devel-ubuntu22.04` (system CUDA, compatible with `--nv`)
+- cuDNN: installed via `nvidia-cudnn-cu12>=9.3,<9.4` pip package to match TF 2.21's build
+- `LD_LIBRARY_PATH` in the image points to the pip cuDNN so TF finds the right version
+
+---
+
 ## Requirements
 
 - Python 3.9+
