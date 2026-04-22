@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --account=def-YOUR_PI        # replace with your allocation
 #SBATCH --job-name=mariha_sac_cl
-#SBATCH --output=%x_%j.out
-#SBATCH --error=%x_%j.err
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -14,7 +14,12 @@
 #   - Data on $SCRATCH/MariHA/data
 #   - setup_cc.sh already run once to create the venv
 
-module load StdEnv/2023 python/3.12 cmake gcc
+mkdir -p logs
+
+module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0
+
+# Expose the opencv module's cv2 bindings inside the venv via EasyBuild root
+export PYTHONPATH="$EBROOTOPENCV/lib/python3.12/site-packages:${PYTHONPATH:-}"
 
 REPO="$HOME/projects/MariHA"         # adjust if your repo is elsewhere
 export MARIHA_DATA_ROOT="${MARIHA_DATA_ROOT:-$SCRATCH/MariHA/data}"

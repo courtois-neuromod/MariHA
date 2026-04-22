@@ -33,7 +33,7 @@ fi
 # ---------------------------------------------------------------------------
 info "Loading modules..."
 # opencv must be loaded as a CC module before venv activation — pip's opencv-python-headless is a dummy on CC
-module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.9.0
+module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0
 success "Modules loaded."
 
 # ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ success "Setup complete."
 echo ""
 echo "Add the following to your job script (or ~/.bashrc):"
 echo ""
-echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.9.0"
+echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
 echo ""
