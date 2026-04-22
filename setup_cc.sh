@@ -92,7 +92,7 @@ pip install -e "$REPO_ROOT" --no-deps
 # ---------------------------------------------------------------------------
 info "Installing tensorflow[and-cuda]..."
 # tensorflow[and-cuda] bundles its own cuDNN — no cudnn module needed on CC.
-pip install "tensorflow[and-cuda]"
+pip install tensorflow  # CC's wheelhouse build is already GPU-enabled
 pip install \
   "tf_keras>=2.13" "tensorflow-probability>=0.21" \
   "gymnasium>=0.29" "numpy>=1.24" "pandas>=2.0" "tensorboard>=2.13" \
