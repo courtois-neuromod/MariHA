@@ -246,20 +246,28 @@ Without it the code falls back to `<repo>/data/` as before.
 **One-time setup** (login node):
 
 ```bash
-# Clone repo to $HOME
-cd $HOME/projects
+# Clone repo to $HOME (keep the repo out of $SCRATCH — lustre causes issues)
+cd $HOME/GitHub
 git clone <repo-url> MariHA
 cd MariHA
 
-# Run CC-specific setup (loads StdEnv/2023 python/3.12, clones stable-retro,
+# Run CC-specific setup (loads modules, clones stable-retro,
 # creates venv, installs MariHA, generates scenario files)
 bash setup_cc.sh
 ```
 
-`setup_cc.sh` defaults `MARIHA_DATA_ROOT` to `$SCRATCH/MariHA/data`. Override
-before running if your data is elsewhere.
+By default `setup_cc.sh` expects data at `$SCRATCH/MariHA/data`. If your data
+lives somewhere else, just export the variable before running:
+
+```bash
+export MARIHA_DATA_ROOT=/path/to/your/data
+bash setup_cc.sh
+```
 
 **Pull data** (if not already done):
+
+The `mario.scenes` dataset is a git-annex repo. Clone it under your data root
+and pull the subject state files:
 
 ```bash
 cd $SCRATCH/MariHA/data/mario.scenes && git annex get sub-*/
@@ -267,9 +275,11 @@ cd $SCRATCH/MariHA/data/mario.scenes && git annex get sub-*/
 
 **Submit a job**:
 
-Edit `scripts/narval_sac_cl_venv.sh` with your SLURM account and repo path, then:
+Edit `scripts/narval_sac_cl_venv.sh` with your SLURM account, then from the
+repo root:
 
 ```bash
+mkdir -p logs
 sbatch scripts/narval_sac_cl_venv.sh
 ```
 
