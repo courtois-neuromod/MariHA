@@ -42,9 +42,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Clone stable-retro (sibling directory) if not already present
+# 3. Clone stable-retro to $SCRATCH (not $HOME — lustre causes checkout failures)
 # ---------------------------------------------------------------------------
-RETRO_DIR="$(dirname "$REPO_ROOT")/stable-retro"
+RETRO_DIR="$SCRATCH/stable-retro"
 if [[ ! -d "$RETRO_DIR" ]]; then
   info "Cloning stable-retro into $RETRO_DIR ..."
   git clone git@github.com:Farama-Foundation/stable-retro "$RETRO_DIR"
