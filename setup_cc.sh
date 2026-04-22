@@ -32,7 +32,7 @@ fi
 # 1. Load CC modules
 # ---------------------------------------------------------------------------
 info "Loading modules..."
-module load StdEnv/2023 python/3.12 cmake gcc
+module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2
 success "Modules loaded."
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ fi
 RETRO_DIR="$SCRATCH/stable-retro"
 if [[ ! -d "$RETRO_DIR" ]]; then
   info "Cloning stable-retro into $RETRO_DIR ..."
-  git clone git@github.com:Farama-Foundation/stable-retro "$RETRO_DIR"
+  git clone https://github.com/Farama-Foundation/stable-retro "$RETRO_DIR"
   success "stable-retro cloned."
 else
   info "stable-retro already present at $RETRO_DIR — skipping clone."
@@ -84,26 +84,20 @@ pip install -e "$RETRO_DIR" --no-build-isolation
 success "stable-retro installed."
 
 info "Installing MariHA (remaining deps, skipping stable-retro)..."
-# --no-deps would skip everything; instead we install normally but stable-retro
-# is already present at the right version so pip will leave it alone.
-pip install -e "$REPO_ROOT"
-success "MariHA installed."
-
-# Verify stable-retro is still the source build (not PyPI binary).
-RETRO_LOCATION=$(python -c "import stable_retro; print(stable_retro.__file__)")
-if [[ "$RETRO_LOCATION" != "$RETRO_DIR"* ]]; then
-  warn "stable-retro may have been replaced by a PyPI binary: $RETRO_LOCATION"
-  warn "Reinstalling from source..."
-  pip install -e "$RETRO_DIR"
-  success "stable-retro reinstalled from source."
-fi
-
+# --no-deps avoids pip re-resolving stable-retro from PyPI and overwriting the source build.
+pip install -e "$REPO_ROOT" --no-deps
+# Install all remaining deps explicitly, excluding stable-retro.
 # ---------------------------------------------------------------------------
-# 6. Install tensorflow[and-cuda] for GPU support
+# 6. Install tensorflow with bundled CUDA/cuDNN (CC has no cudnn module)
 # ---------------------------------------------------------------------------
-info "Installing tensorflow[and-cuda] for GPU support..."
+info "Installing tensorflow[and-cuda]..."
+# tensorflow[and-cuda] bundles its own cuDNN — no cudnn module needed on CC.
 pip install "tensorflow[and-cuda]"
-success "tensorflow[and-cuda] installed."
+pip install \
+  "tf_keras>=2.13" "tensorflow-probability>=0.21" \
+  "gymnasium>=0.29" "numpy>=1.24" "pandas>=2.0" "tensorboard>=2.13" \
+  "opencv-python-headless>=4.8" "tqdm>=4.65" "rich>=13.0"
+success "tensorflow[and-cuda] + remaining deps installed."
 
 # ---------------------------------------------------------------------------
 # 7. Stimuli data check
@@ -178,7 +172,7 @@ success "Setup complete."
 echo ""
 echo "Add the following to your job script (or ~/.bashrc):"
 echo ""
-echo "    module load StdEnv/2023 python/3.12 cmake gcc"
+echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
 echo ""
