@@ -23,11 +23,16 @@ die()     { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Compute nodes have no internet — this script must be run on a login node.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  die "This script requires internet access. Run it on a login node, not inside a job/salloc."
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Load CC modules
 # ---------------------------------------------------------------------------
 info "Loading modules..."
-module load StdEnv/2023 python/3.12
+module load StdEnv/2023 python/3.12 cmake gcc
 success "Modules loaded."
 
 # ---------------------------------------------------------------------------
@@ -70,8 +75,12 @@ source "$VENV_DIR/bin/activate"
 # 5. Install stable-retro from source first, then MariHA without stable-retro
 #    so pip does not overwrite the source build with the PyPI binary.
 # ---------------------------------------------------------------------------
+info "Installing build tools..."
+pip install setuptools wheel
+success "Build tools installed."
+
 info "Installing stable-retro from source..."
-pip install -e "$RETRO_DIR"
+pip install -e "$RETRO_DIR" --no-build-isolation
 success "stable-retro installed."
 
 info "Installing MariHA (remaining deps, skipping stable-retro)..."
@@ -169,7 +178,7 @@ success "Setup complete."
 echo ""
 echo "Add the following to your job script (or ~/.bashrc):"
 echo ""
-echo "    module load StdEnv/2023 python/3.12"
+echo "    module load StdEnv/2023 python/3.12 cmake gcc"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
 echo ""

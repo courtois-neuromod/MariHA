@@ -14,7 +14,7 @@
 #   - Data on $SCRATCH/MariHA/data
 #   - setup_cc.sh already run once to create the venv
 
-module load StdEnv/2023 python/3.12
+module load StdEnv/2023 python/3.12 cmake gcc
 
 REPO="$HOME/projects/MariHA"         # adjust if your repo is elsewhere
 export MARIHA_DATA_ROOT="${MARIHA_DATA_ROOT:-$SCRATCH/MariHA/data}"
