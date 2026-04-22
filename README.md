@@ -224,44 +224,85 @@ MariHA extends COOM with:
 
 ## Running on Compute Canada (Narval)
 
-MariHA uses `stable-retro` and a specific cuDNN version that cannot be installed
-via Compute Canada's module system. The recommended approach is to run inside an
-**Apptainer container** that bundles all dependencies.
+Two workflows are supported. Both share the same `MARIHA_DATA_ROOT` mechanism
+for keeping data on `$SCRATCH` and the repo on `$HOME`.
 
-### One-time setup
+### `MARIHA_DATA_ROOT` — separating repo and data
 
-**1. Pull the pre-built image** (on a login node):
+By default MariHA looks for `data/` inside the repo. If your data lives
+elsewhere (e.g. `$SCRATCH/MariHA/data`), set:
+
+```bash
+export MARIHA_DATA_ROOT=$SCRATCH/MariHA/data
+```
+
+This can go in your `~/.bashrc` or at the top of your SLURM job script.
+Without it the code falls back to `<repo>/data/` as before.
+
+---
+
+### Option A — Plain venv (no apptainer, recommended)
+
+**One-time setup** (login node):
+
+```bash
+# Clone repo to $HOME
+cd $HOME/projects
+git clone <repo-url> MariHA
+cd MariHA
+
+# Run CC-specific setup (loads StdEnv/2023 python/3.12, clones stable-retro,
+# creates venv, installs MariHA, generates scenario files)
+bash setup_cc.sh
+```
+
+`setup_cc.sh` defaults `MARIHA_DATA_ROOT` to `$SCRATCH/MariHA/data`. Override
+before running if your data is elsewhere.
+
+**Pull data** (if not already done):
+
+```bash
+cd $SCRATCH/MariHA/data/mario.scenes && git annex get sub-*/
+```
+
+**Submit a job**:
+
+Edit `scripts/narval_sac_cl_venv.sh` with your SLURM account and repo path, then:
+
+```bash
+sbatch scripts/narval_sac_cl_venv.sh
+```
+
+---
+
+### Option B — Apptainer container
+
+**One-time setup** (login node):
 
 ```bash
 module load StdEnv/2023 apptainer/1.4.5
 export APPTAINER_CACHEDIR=$SCRATCH/.apptainer_cache
 apptainer pull --dir $SCRATCH docker://cleode5a7/mariha-gpu:latest
 mv $SCRATCH/mariha-gpu_latest.sif $SCRATCH/mariha-gpu.sif
-```
 
-**2. Clone the repo and pull data**:
-
-```bash
 cd $SCRATCH
 git clone <repo-url> MariHA
 cd MariHA/data/mario.scenes && git annex get sub-*/
 ```
 
-### Submit a training job
+**Submit a job**:
 
 Edit `scripts/narval_test_sac_cl.sh` with your SLURM account, then:
 
 ```bash
-mkdir -p $SCRATCH/MariHA/logs
 sbatch scripts/narval_test_sac_cl.sh
 ```
 
-The SLURM script uses `apptainer exec --nv` to pass the GPU through to the
-container. No `module load cuda` or `module load python` needed.
+The script passes `MARIHA_DATA_ROOT` into the container via `--env`. When the
+repo and data are co-located under `$SCRATCH/MariHA/` the default works without
+any changes.
 
-### Rebuilding the image
-
-If you need to rebuild (e.g. after adding a dependency):
+**Rebuilding the image** (after adding a dependency):
 
 ```bash
 # On your local Linux machine

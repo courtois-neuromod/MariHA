@@ -32,8 +32,11 @@ _RUN_RE = re.compile(r"_run-(\d+)_")
 # Paths
 # ---------------------------------------------------------------------------
 
+import os
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]  # MariHA/
-_SCENES_ROOT = _REPO_ROOT / "data" / "mario.scenes"
+_DATA_ROOT = Path(os.environ["MARIHA_DATA_ROOT"]) if "MARIHA_DATA_ROOT" in os.environ else _REPO_ROOT / "data"
+_SCENES_ROOT = _DATA_ROOT / "mario.scenes"
 
 # Columns kept as metadata (everything not promoted to a named field).
 _METADATA_COLS = [

@@ -37,6 +37,7 @@ done
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
+DATA_ROOT="${MARIHA_DATA_ROOT:-$REPO_ROOT/data}"
 
 # ---------------------------------------------------------------------------
 # 1. Ensure uv is available
@@ -112,7 +113,7 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Stimuli data check
 # ---------------------------------------------------------------------------
-STIMULI_DIR="$REPO_ROOT/data/mario/stimuli/SuperMarioBros-Nes"
+STIMULI_DIR="$DATA_ROOT/mario/stimuli/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
   die "Stimuli directory not found: $STIMULI_DIR
   The Mario game integration must be present in data/mario/stimuli/.
@@ -123,7 +124,7 @@ success "Stimuli directory found."
 # ---------------------------------------------------------------------------
 # 5. Subject data (git-annex)
 # ---------------------------------------------------------------------------
-SCENES_DIR="$REPO_ROOT/data/mario.scenes"
+SCENES_DIR="$DATA_ROOT/mario.scenes"
 if [[ "$CHECK_DATA" == true ]]; then
   info "Checking subject data availability..."
   if command -v git-annex &>/dev/null && [[ -d "$SCENES_DIR/.git" ]]; then

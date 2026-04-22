@@ -26,15 +26,11 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 
+import os
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]  # MariHA/
-_MASTERSHEET = (
-    _REPO_ROOT
-    / "data"
-    / "mario.scenes"
-    / "sourcedata"
-    / "scenes_info"
-    / "scenes_mastersheet.csv"
-)
+_DATA_ROOT = Path(os.environ["MARIHA_DATA_ROOT"]) if "MARIHA_DATA_ROOT" in os.environ else _REPO_ROOT / "data"
+_MASTERSHEET = _DATA_ROOT / "mario.scenes" / "sourcedata" / "scenes_info" / "scenes_mastersheet.csv"
 _SCENARIOS_DIR = Path(__file__).resolve().parent / "scenarios"
 
 # ---------------------------------------------------------------------------

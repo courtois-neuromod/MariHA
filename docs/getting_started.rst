@@ -28,6 +28,24 @@ Clone the repository and run the setup script:
 3. Generate the per-scene ``scenario.json`` files
 4. Smoke-test the installation
 
+External data root (``MARIHA_DATA_ROOT``)
+-----------------------------------------
+
+By default MariHA expects data at ``<repo>/data/``.  If your data lives
+elsewhere — for example on a scratch filesystem on an HPC cluster — set the
+``MARIHA_DATA_ROOT`` environment variable before running setup or training:
+
+.. code-block:: bash
+
+   export MARIHA_DATA_ROOT=/path/to/your/data
+   bash setup.sh          # will look for stimuli and mario.scenes under that path
+   mariha-run-cl ...      # same at runtime
+
+Without the variable the behaviour is unchanged (falls back to ``<repo>/data/``).
+
+For Compute Canada specifically, see the README for the ``setup_cc.sh`` script
+and the two SLURM job scripts (apptainer and plain-venv variants).
+
 Pulling the dataset
 -------------------
 
@@ -36,11 +54,11 @@ Subject gameplay data is stored in ``data/mario.scenes`` as a
 
 .. code-block:: bash
 
-   # All subjects
-   cd data/mario.scenes && git annex get sub-*/
+   # All subjects (adjust path if using MARIHA_DATA_ROOT)
+   cd $MARIHA_DATA_ROOT/mario.scenes && git annex get sub-*/
 
    # Single subject
-   cd data/mario.scenes && git annex get sub-01/
+   cd $MARIHA_DATA_ROOT/mario.scenes && git annex get sub-01/
 
 Each subject's data contains ``.state`` files — emulator snapshots that
 place Mario at exactly the position and game state a human player was at
