@@ -32,7 +32,8 @@ fi
 # 1. Load CC modules
 # ---------------------------------------------------------------------------
 info "Loading modules..."
-module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2
+# opencv must be loaded as a CC module before venv activation — pip's opencv-python-headless is a dummy on CC
+module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.9.0
 success "Modules loaded."
 
 # ---------------------------------------------------------------------------
@@ -96,7 +97,8 @@ pip install tensorflow  # CC's wheelhouse build is already GPU-enabled
 pip install \
   "tf_keras>=2.13" "tensorflow-probability>=0.21" \
   "gymnasium>=0.29" "numpy>=1.24" "pandas>=2.0" "tensorboard>=2.13" \
-  "opencv-python-headless>=4.8" "tqdm>=4.65" "rich>=13.0"
+  "tqdm>=4.65" "rich>=13.0"
+# opencv is provided by the CC module loaded above — do not pip-install it
 success "tensorflow[and-cuda] + remaining deps installed."
 
 # ---------------------------------------------------------------------------
@@ -172,7 +174,7 @@ success "Setup complete."
 echo ""
 echo "Add the following to your job script (or ~/.bashrc):"
 echo ""
-echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2"
+echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.9.0"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
 echo ""
