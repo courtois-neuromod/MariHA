@@ -18,7 +18,9 @@ interpret that matrix.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List, Optional
+
+import numpy as np
 
 from mariha.curriculum.episode import EpisodeSpec
 
@@ -93,3 +95,89 @@ def build_run_metadata(
             "n_clips": entry["n_clips"],
         }
     return out
+
+
+def aggregate_behavioral_stats(stats_list: List[Dict]) -> Dict:
+    """Aggregate per-episode behavioral dicts into scene-level means."""
+    if not stats_list:
+        return {}
+    return {
+        "clear_rate": float(np.mean([s.get("cleared", False) for s in stats_list])),
+        "mean_x_traveled": float(np.mean([s.get("x_traveled", 0) for s in stats_list])),
+        "mean_score_gained": float(np.mean([s.get("score_gained", 0) for s in stats_list])),
+        "death_rate": float(np.mean([s.get("lives_lost", 0) for s in stats_list])),
+    }
+
+
+def compute_cl_metrics(
+    returns_matrix: Dict[str, Dict[str, float]],
+    scene_metadata: Optional[Dict[str, Dict]] = None,
+) -> Dict:
+    """Compute AP, BWT, and forgetting from the dense returns matrix.
+
+    Args:
+        returns_matrix: ``{str(run_index): {scene_id: mean_return}}``.
+        scene_metadata: Optional output of ``build_scene_metadata``, used to
+            look up each scene's first-exposure run index for BWT/forgetting.
+
+    Returns:
+        Dict with keys ``ap``, ``bwt``, ``forgetting``, ``n_scenes``,
+        ``n_checkpoints``. BWT and forgetting are ``None`` when
+        ``scene_metadata`` is not provided.
+    """
+    run_indices = sorted(int(k) for k in returns_matrix)
+    if not run_indices:
+        return {}
+
+    final_returns = returns_matrix[str(max(run_indices))]
+    ap = float(np.mean(list(final_returns.values()))) if final_returns else 0.0
+
+    bwt_values: List[float] = []
+    forgetting_values: List[float] = []
+
+    if scene_metadata:
+        for scene_id, r_final in final_returns.items():
+            meta = scene_metadata.get(scene_id, {})
+            first_ri = meta.get("first_exposure_run_index")
+            if first_ri is None:
+                continue
+            row = returns_matrix.get(str(first_ri), {})
+            r_first = row.get(scene_id)
+            if r_first is None:
+                continue
+            delta = r_final - r_first
+            bwt_values.append(delta)
+            forgetting_values.append(max(0.0, -delta))
+
+    return {
+        "ap": ap,
+        "bwt": float(np.mean(bwt_values)) if bwt_values else None,
+        "forgetting": float(np.mean(forgetting_values)) if forgetting_values else None,
+        "n_scenes": len(final_returns),
+        "n_checkpoints": len(run_indices),
+    }
+
+
+def summarise_behavioral_metrics(
+    behavioral_matrix: Dict[str, Dict[str, Dict]],
+) -> Dict:
+    """Aggregate behavioral stats across all (checkpoint, scene) cells."""
+    clear_rates, x_traveled, scores, death_rates = [], [], [], []
+    for run_stats in behavioral_matrix.values():
+        for cell in run_stats.values():
+            if not cell:
+                continue
+            clear_rates.append(cell.get("clear_rate", 0.0))
+            x_traveled.append(cell.get("mean_x_traveled", 0.0))
+            scores.append(cell.get("mean_score_gained", 0.0))
+            death_rates.append(cell.get("death_rate", 0.0))
+
+    def _mean(lst: list) -> Optional[float]:
+        return float(np.mean(lst)) if lst else None
+
+    return {
+        "mean_clear_rate": _mean(clear_rates),
+        "mean_x_traveled": _mean(x_traveled),
+        "mean_score_gained": _mean(scores),
+        "mean_death_rate": _mean(death_rates),
+    }
