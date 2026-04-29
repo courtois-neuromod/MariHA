@@ -507,12 +507,7 @@ class PPO(BaseAgent):
 
     def load_weights(self, directory: Path) -> None:
         directory = Path(directory)
-        # Backbone conv variables are only created on first call, not in __init__.
-        # Run a dummy forward pass so every variable exists before the restore.
-        dummy_obs = tf.zeros((1,) + self.obs_shape)
-        dummy_task = tf.zeros((1, self.num_tasks))
-        self.model(dummy_obs, dummy_task)
-        self.model.load_weights(str(directory / "ppo_actor_critic")).expect_partial()
+        self.model.load_weights(str(directory / "ppo_actor_critic"))
 
     # ==================================================================
     # Optional BaseAgent hooks

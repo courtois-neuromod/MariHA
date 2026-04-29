@@ -169,49 +169,49 @@ def main() -> None:
     from mariha.env.continual import make_scene_env
 
     first_scene = scenes_to_eval[0]
-    first_exit = scene_meta_emu[first_scene]["exit_point"]
+    dummy_env = make_scene_env(
+        scene_id=first_scene,
+        exit_point=scene_meta_emu[first_scene]["exit_point"],
+        run_id=run_ids[0],
+        run_ids=run_ids,
+    )
 
     returns_matrix: dict[str, dict[str, float]] = {}
     behavioral_matrix: dict[str, dict[str, dict]] = {}
 
-    for ci, run_index in enumerate(checkpoint_indexes):
-        ckpt_path = task_checkpoints[run_index]
-        logger.info(
-            "[%d/%d] checkpoint run_index=%d (%s)",
-            ci + 1, len(checkpoint_indexes), run_index, ckpt_path,
-        )
-
-        # Open dummy env only long enough to build the agent, then close it
-        # before eval so retro never has two emulator instances in the same process.
-        dummy_env = make_scene_env(
-            scene_id=first_scene,
-            exit_point=first_exit,
-            run_id=run_ids[0],
-            run_ids=run_ids,
-        )
-        agent = _build_eval_agent(agent_name, ckpt_path, dummy_env, run_ids, args)
-        dummy_env.close()
-
-        row_returns: dict[str, float] = {}
-        row_behavioral: dict[str, dict] = {}
-        for si, scene_id in enumerate(scenes_to_eval):
-            spec = eval_specs[scene_id]
-            mean_ret, stats = eval_on_scene(
-                agent, scene_id, spec, run_ids,
-                n_episodes=args.n_episodes,
-                scenarios_dir=SCENARIOS_DIR,
-            )
-            row_returns[scene_id] = float(mean_ret)
-            row_behavioral[scene_id] = _aggregate_behavioral(stats)
+    try:
+        for ci, run_index in enumerate(checkpoint_indexes):
+            ckpt_path = task_checkpoints[run_index]
             logger.info(
-                "    [%3d/%3d] %s  return=%.2f  clear=%.0f%%",
-                si + 1, len(scenes_to_eval), scene_id,
-                mean_ret,
-                row_behavioral[scene_id].get("clear_rate", 0) * 100,
+                "[%d/%d] checkpoint run_index=%d (%s)",
+                ci + 1, len(checkpoint_indexes), run_index, ckpt_path,
+            )
+            agent = _build_eval_agent(
+                agent_name, ckpt_path, dummy_env, run_ids, args,
             )
 
-        returns_matrix[str(run_index)] = row_returns
-        behavioral_matrix[str(run_index)] = row_behavioral
+            row_returns: dict[str, float] = {}
+            row_behavioral: dict[str, dict] = {}
+            for si, scene_id in enumerate(scenes_to_eval):
+                spec = eval_specs[scene_id]
+                mean_ret, stats = eval_on_scene(
+                    agent, scene_id, spec, run_ids,
+                    n_episodes=args.n_episodes,
+                    scenarios_dir=SCENARIOS_DIR,
+                )
+                row_returns[scene_id] = float(mean_ret)
+                row_behavioral[scene_id] = _aggregate_behavioral(stats)
+                logger.info(
+                    "    [%3d/%3d] %s  return=%.2f  clear=%.0f%%",
+                    si + 1, len(scenes_to_eval), scene_id,
+                    mean_ret,
+                    row_behavioral[scene_id].get("clear_rate", 0) * 100,
+                )
+
+            returns_matrix[str(run_index)] = row_returns
+            behavioral_matrix[str(run_index)] = row_behavioral
+    finally:
+        dummy_env.close()
 
     results = {
         "metadata": {
