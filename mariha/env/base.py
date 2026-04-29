@@ -192,8 +192,10 @@ class MarioEnv:
         self.observation_space = self._env.observation_space
         self.action_space = self._env.action_space
 
-        # Track X-position between steps for delta-X reward.
         self._prev_x: int = 0
+        self._last_time: int | None = None
+        self._curr_lives: int = 0
+        self._curr_score: int = 0
 
     # ------------------------------------------------------------------
     # State loading
@@ -233,25 +235,43 @@ class MarioEnv:
         # directly via data.lookup_all() which is populated after reset().
         info = self._env.data.lookup_all()
         self._prev_x = compute_x_position(info)
+        self._last_time = None
+        self._curr_lives = int(info.get("lives", 0))
+        self._curr_score = int(info.get("score", 0))
         return obs, self._enrich_info(info)
 
     def step(
         self, action: np.ndarray
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
-        """Step the environment with a raw NES button array.
+        obs, _retro_reward, terminated, truncated, _step_info = self._env.step(action)
+        info = self._env.data.lookup_all()
 
-        Reward is the change in absolute X-position since the last step.
+        reward = 0.0
 
-        Args:
-            action: MultiBinary NES button array (length 9).
+        time_val = int(info.get("time", 0))
+        if self._last_time is not None:
+            reward += min(time_val - self._last_time, 0)
+        self._last_time = time_val
 
-        Returns:
-            ``(obs, reward, terminated, truncated, info)`` tuple.
-        """
-        obs, _retro_reward, terminated, truncated, info = self._env.step(action)
         x_pos = compute_x_position(info)
-        reward = float(x_pos - self._prev_x)
+        diff_x = x_pos - self._prev_x
+        reward += diff_x if -5 <= diff_x <= 5 else 0
         self._prev_x = x_pos
+
+        lives = int(info.get("lives", 0))
+        if lives < self._curr_lives:
+            reward -= 15
+            self._curr_lives = lives
+
+        reward = max(min(reward, 15), -15)
+
+        score = int(info.get("score", 0))
+        reward += min((score - self._curr_score) / 4.0, 50)
+        self._curr_score = score
+
+        if lives < 0:
+            reward -= 50
+
         return obs, reward, terminated, truncated, self._enrich_info(info)
 
     def render(self) -> np.ndarray | None:

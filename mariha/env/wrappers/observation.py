@@ -187,6 +187,48 @@ class FrameStackWrapper:
 
 
 # ---------------------------------------------------------------------------
+# Frame skip
+# ---------------------------------------------------------------------------
+
+
+class FrameSkipWrapper:
+    """Repeat each action for ``n_skip`` steps and accumulate reward.
+
+    Args:
+        env: The environment to wrap.
+        n_skip: Number of raw steps to repeat each action. Default: 4.
+    """
+
+    def __init__(self, env: Any, n_skip: int = 4) -> None:
+        self._env = env
+        self._n_skip = n_skip
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+
+    def reset(self, **kwargs) -> tuple[np.ndarray, dict]:
+        return self._env.reset(**kwargs)
+
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
+        total_reward = 0.0
+        for _ in range(self._n_skip):
+            obs, reward, terminated, truncated, info = self._env.step(action)
+            total_reward += reward
+            if terminated or truncated:
+                break
+        return obs, total_reward / 10.0, terminated, truncated, info
+
+    def render(self):
+        return self._env.render()
+
+    def close(self) -> None:
+        self._env.close()
+
+    @property
+    def unwrapped(self):
+        return self._env.unwrapped
+
+
+# ---------------------------------------------------------------------------
 # Task ID
 # ---------------------------------------------------------------------------
 

@@ -42,6 +42,7 @@ from mariha.env.base import STIMULI_PATH, SCENARIOS_DIR
 from mariha.env.scene import SceneEnv
 from mariha.env.wrappers.action import ActionWrapper
 from mariha.env.wrappers.observation import (
+    FrameSkipWrapper,
     FrameStackWrapper,
     GrayscaleWrapper,
     ResizeWrapper,
@@ -88,6 +89,7 @@ def make_scene_env(
         scenarios_dir=scenarios_dir,
     )
     env = ActionWrapper(env)
+    env = FrameSkipWrapper(env, n_skip=4)
     env = GrayscaleWrapper(env)
     env = ResizeWrapper(env)
     env = FrameStackWrapper(env)
