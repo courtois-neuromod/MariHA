@@ -19,7 +19,7 @@ RUN_PREFIX="${RUN_PREFIX:-2026_04_24__12_11_21_seed0}"
 
 mkdir -p logs
 
-module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0
+module load StdEnv/2023 python/3.12 cmake gcc opencv/4.13.0
 
 export PYTHONPATH="$EBROOTOPENCV/lib/python3.12/site-packages:${PYTHONPATH:-}"
 
