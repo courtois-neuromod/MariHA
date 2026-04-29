@@ -375,6 +375,13 @@ class DQN(BaseAgent):
     # BenchmarkAgent contract
     # ==================================================================
 
+    @tf.function
+    def _get_action_tf(
+        self, obs: tf.Tensor, one_hot: tf.Tensor
+    ) -> tf.Tensor:
+        q_values = self.q_network(obs, one_hot)
+        return tf.cast(tf.argmax(q_values[0]), tf.int32)
+
     def get_action(
         self,
         obs: np.ndarray,
@@ -383,8 +390,7 @@ class DQN(BaseAgent):
     ) -> int:
         obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
         one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
-        q_values = self.q_network(obs_t, one_hot_t)
-        return int(tf.argmax(q_values[0]).numpy())
+        return int(self._get_action_tf(obs_t, one_hot_t).numpy())
 
     # ==================================================================
     # Required BaseAgent callbacks

@@ -222,6 +222,118 @@ MariHA extends COOM with:
 
 ---
 
+## Running on Compute Canada (Narval)
+
+Two workflows are supported. Both share the same `MARIHA_DATA_ROOT` mechanism
+for keeping data on `$SCRATCH` and the repo on `$HOME`.
+
+### `MARIHA_DATA_ROOT` — separating repo and data
+
+By default MariHA looks for `data/` inside the repo. If your data lives
+elsewhere (e.g. `$SCRATCH/MariHA/data`), set:
+
+```bash
+export MARIHA_DATA_ROOT=$SCRATCH/MariHA/data
+```
+
+This can go in your `~/.bashrc` or at the top of your SLURM job script.
+Without it the code falls back to `<repo>/data/` as before.
+
+---
+
+### Option A — Plain venv (no apptainer, recommended)
+
+**One-time setup** (login node):
+
+```bash
+# Clone repo to $HOME (keep the repo out of $SCRATCH — lustre causes issues)
+cd $HOME/GitHub
+git clone <repo-url> MariHA
+cd MariHA
+
+# Run CC-specific setup (loads modules, clones stable-retro,
+# creates venv, installs MariHA, generates scenario files)
+bash setup_cc.sh
+```
+
+By default `setup_cc.sh` expects data at `$SCRATCH/MariHA/data`. If your data
+lives somewhere else, just export the variable before running:
+
+```bash
+export MARIHA_DATA_ROOT=/path/to/your/data
+bash setup_cc.sh
+```
+
+**Pull data** (if not already done):
+
+The `mario.scenes` dataset is a git-annex repo. Clone it under your data root
+and pull the subject state files:
+
+```bash
+cd $SCRATCH/MariHA/data/mario.scenes && git annex get sub-*/
+```
+
+**Submit a job**:
+
+Edit `scripts/narval_sac_cl_venv.sh` with your SLURM account, then from the
+repo root:
+
+```bash
+mkdir -p logs
+sbatch scripts/narval_sac_cl_venv.sh
+```
+
+---
+
+### Option B — Apptainer container
+
+**One-time setup** (login node):
+
+```bash
+module load StdEnv/2023 apptainer/1.4.5
+export APPTAINER_CACHEDIR=$SCRATCH/.apptainer_cache
+apptainer pull --dir $SCRATCH docker://cleode5a7/mariha-gpu:latest
+mv $SCRATCH/mariha-gpu_latest.sif $SCRATCH/mariha-gpu.sif
+
+cd $SCRATCH
+git clone <repo-url> MariHA
+cd MariHA/data/mario.scenes && git annex get sub-*/
+```
+
+**Submit a job**:
+
+Edit `scripts/narval_test_sac_cl.sh` with your SLURM account, then:
+
+```bash
+sbatch scripts/narval_test_sac_cl.sh
+```
+
+The script passes `MARIHA_DATA_ROOT` into the container via `--env`. When the
+repo and data are co-located under `$SCRATCH/MariHA/` the default works without
+any changes.
+
+**Rebuilding the image** (after adding a dependency):
+
+```bash
+# On your local Linux machine
+docker build -t mariha-gpu .
+docker tag mariha-gpu cleode5a7/mariha-gpu
+docker push cleode5a7/mariha-gpu
+
+# On Narval: re-pull
+rm $SCRATCH/mariha-gpu.sif
+export APPTAINER_CACHEDIR=$SCRATCH/.apptainer_cache
+apptainer pull --dir $SCRATCH docker://cleode5a7/mariha-gpu:latest
+mv $SCRATCH/mariha-gpu_latest.sif $SCRATCH/mariha-gpu.sif
+```
+
+The `Dockerfile` is at the repo root. Key design choices:
+- Base image: `nvidia/cuda:12.5.1-devel-ubuntu22.04` (system CUDA, compatible with `--nv`)
+- cuDNN: installed via `nvidia-cudnn-cu12>=9.3,<9.4` pip package to match TF 2.21's build
+- `LD_LIBRARY_PATH` in the image points to the pip cuDNN so TF finds the right version
+
+---
+
 ## Requirements
 
 - Python 3.9+

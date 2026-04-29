@@ -146,18 +146,28 @@ class PPO(BaseAgent):
             hide_task_id=self.hide_task_id,
         )
 
+    @tf.function
+    def _get_action_tf(
+        self,
+        obs: tf.Tensor,
+        one_hot: tf.Tensor,
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Compiled action selection — returns (action, log_prob, value) as tensors."""
+        logits, value = self.model(obs, one_hot)
+        probs = tf.nn.softmax(logits[0])
+        action = tf.random.categorical(tf.math.log(probs[tf.newaxis]), 1)[0, 0]
+        action = tf.cast(action, tf.int32)
+        log_prob = tf.math.log(probs[action] + 1e-8)
+        return action, log_prob, value[0, 0]
+
     def _get_action_with_info(
         self, obs: np.ndarray, task_one_hot: np.ndarray
     ) -> Tuple[int, float, float]:
         """Return ``(action, log_prob, value)`` for rollout collection."""
         obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
         one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
-        logits, value = self.model(obs_t, one_hot_t)
-        probs = tf.nn.softmax(logits[0])
-        dist = tf.random.categorical(tf.math.log(probs[tf.newaxis]), 1)
-        action = int(dist[0, 0].numpy())
-        log_prob = float(tf.math.log(probs[action] + 1e-8).numpy())
-        return action, log_prob, float(value[0, 0].numpy())
+        action, log_prob, value = self._get_action_tf(obs_t, one_hot_t)
+        return int(action.numpy()), float(log_prob.numpy()), float(value.numpy())
 
     def _make_gradient_step_fn(self, current_task_idx: int):
         """Build a per-task compiled minibatch gradient step.
@@ -382,6 +392,13 @@ class PPO(BaseAgent):
     # BenchmarkAgent contract
     # ==================================================================
 
+    @tf.function
+    def _get_action_deterministic_tf(
+        self, obs: tf.Tensor, one_hot: tf.Tensor
+    ) -> tf.Tensor:
+        logits, _ = self.model(obs, one_hot)
+        return tf.cast(tf.argmax(logits[0]), tf.int32)
+
     def get_action(
         self,
         obs: np.ndarray,
@@ -390,13 +407,10 @@ class PPO(BaseAgent):
     ) -> int:
         obs_t = tf.expand_dims(tf.cast(obs, tf.float32), 0)
         one_hot_t = tf.expand_dims(tf.cast(task_one_hot, tf.float32), 0)
-        logits, _ = self.model(obs_t, one_hot_t)
         if deterministic:
-            return int(tf.argmax(logits[0]).numpy())
-        probs = tf.nn.softmax(logits[0])
-        return int(
-            tf.random.categorical(tf.math.log(probs[tf.newaxis]), 1)[0, 0].numpy()
-        )
+            return int(self._get_action_deterministic_tf(obs_t, one_hot_t).numpy())
+        action, _, _ = self._get_action_tf(obs_t, one_hot_t)
+        return int(action.numpy())
 
     # ==================================================================
     # Required BaseAgent callbacks

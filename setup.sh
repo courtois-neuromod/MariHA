@@ -37,6 +37,7 @@ done
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
+DATA_ROOT="${MARIHA_DATA_ROOT:-$REPO_ROOT/data}"
 
 # ---------------------------------------------------------------------------
 # 1. Ensure uv is available
@@ -50,11 +51,25 @@ fi
 success "uv $(uv --version | awk '{print $2}')"
 
 # ---------------------------------------------------------------------------
-# 2. Ensure Python $PYTHON_VERSION is available via uv
+# 2. Resolve Python interpreter
 # ---------------------------------------------------------------------------
-info "Ensuring Python $PYTHON_VERSION is available..."
-uv python install "$PYTHON_VERSION"
-success "Python $PYTHON_VERSION ready."
+# Prefer a system Python matching $PYTHON_VERSION that is already on PATH
+# (e.g. after `module load python/3.12` on Compute Canada).  Using a system
+# interpreter avoids uv embedding its own bundled CPython in the venv, whose
+# path becomes a broken symlink on HPC cluster nodes that didn't create it.
+info "Resolving Python $PYTHON_VERSION interpreter..."
+SYSTEM_PYTHON="$(command -v "python${PYTHON_VERSION}" 2>/dev/null \
+                 || command -v "python3" 2>/dev/null || true)"
+
+if [[ -n "$SYSTEM_PYTHON" && "$SYSTEM_PYTHON" != *".local/share/uv"* ]]; then
+  PYTHON_ARG="$SYSTEM_PYTHON"
+  success "Using system Python at $PYTHON_ARG"
+else
+  info "System Python $PYTHON_VERSION not found — installing via uv..."
+  uv python install "$PYTHON_VERSION"
+  PYTHON_ARG="$PYTHON_VERSION"
+  success "Python $PYTHON_VERSION ready (uv-managed)."
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Virtual environment
@@ -64,7 +79,7 @@ if [[ -d "$VENV_DIR/bin" ]]; then
   info "Virtual environment already exists at env/ — reusing."
 else
   info "Creating virtual environment at env/ ..."
-  uv venv --python "$PYTHON_VERSION" "$VENV_DIR"
+  uv venv --python "$PYTHON_ARG" "$VENV_DIR"
   success "Virtual environment created."
 fi
 
@@ -76,6 +91,14 @@ PYTHON_VENV="$VENV_DIR/bin/python"
 info "Installing mariha and dependencies (this may take a few minutes)..."
 uv pip install --python "$PYTHON_VENV" -e ".[dev]" --quiet
 success "Package installed."
+
+# On Linux, swap plain tensorflow for the CUDA-bundled wheel so TF can find
+# GPU libraries without requiring exact system CUDA module versions.
+if [[ "$(uname)" == "Linux" ]]; then
+  info "Linux detected — installing tensorflow[and-cuda] for GPU support..."
+  uv pip install --python "$PYTHON_VENV" "tensorflow[and-cuda]" --quiet
+  success "tensorflow[and-cuda] installed."
+fi
 
 # Verify tf_keras is importable (needed for TF >= 2.16 / Keras 3 environments)
 if "$PYTHON_VENV" -c "import tensorflow as tf; v=tf.__version__; parts=v.split('.'); assert int(parts[1]) >= 16 if int(parts[0])==2 else False" 2>/dev/null; then
@@ -90,7 +113,7 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Stimuli data check
 # ---------------------------------------------------------------------------
-STIMULI_DIR="$REPO_ROOT/data/mario/stimuli/SuperMarioBros-Nes"
+STIMULI_DIR="$DATA_ROOT/mario/stimuli/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
   die "Stimuli directory not found: $STIMULI_DIR
   The Mario game integration must be present in data/mario/stimuli/.
@@ -101,7 +124,7 @@ success "Stimuli directory found."
 # ---------------------------------------------------------------------------
 # 5. Subject data (git-annex)
 # ---------------------------------------------------------------------------
-SCENES_DIR="$REPO_ROOT/data/mario.scenes"
+SCENES_DIR="$DATA_ROOT/mario.scenes"
 if [[ "$CHECK_DATA" == true ]]; then
   info "Checking subject data availability..."
   if command -v git-annex &>/dev/null && [[ -d "$SCENES_DIR/.git" ]]; then
