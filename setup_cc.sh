@@ -257,4 +257,4 @@ if [[ "$CUSTOM_DATA_ROOT" == true ]]; then
   echo ""
 fi
 echo "Then run training with:"
-echo "    mariha-run-cl --subject sub-01 --seed 0"
+echo "    mariha-run-cl --agent sac --cl_method ewc --subject sub-01 --seed 0"
