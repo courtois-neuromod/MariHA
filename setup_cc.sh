@@ -106,9 +106,8 @@ if [[ "$DOWNLOAD_DATA" == true ]]; then
   # mario.stimuli → $MARIHA_DATA_ROOT/mario  (cd into DATA_ROOT first so datalad names it 'mario')
   if [[ ! -d "$MARIHA_DATA_ROOT/mario/.datalad" ]]; then
     info "Downloading mario.stimuli → $MARIHA_DATA_ROOT/mario ..."
-    info "(SSH key required for git@github.com)"
     pushd "$MARIHA_DATA_ROOT" > /dev/null
-    datalad install -s git@github.com:courtois-neuromod/mario.stimuli.git mario
+    datalad install -s https://github.com/courtois-neuromod/mario.stimuli.git mario
     popd > /dev/null
   else
     info "mario.stimuli already present — skipping install."
@@ -123,9 +122,8 @@ if [[ "$DOWNLOAD_DATA" == true ]]; then
     # mario.scenes → $MARIHA_DATA_ROOT/mario.scenes  (cd into DATA_ROOT so datalad places it there)
     if [[ ! -d "$MARIHA_DATA_ROOT/mario.scenes/.datalad" ]]; then
       info "Downloading mario.scenes → $MARIHA_DATA_ROOT/mario.scenes ..."
-      info "(SSH key required for git@github.com)"
       pushd "$MARIHA_DATA_ROOT" > /dev/null
-      datalad install git@github.com:courtois-neuromod/mario.scenes
+      datalad install https://github.com/courtois-neuromod/mario.scenes
       popd > /dev/null
       success "mario.scenes installed."
     else
