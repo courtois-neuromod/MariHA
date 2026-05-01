@@ -269,9 +269,6 @@ class MarioEnv:
         reward += min((score - self._curr_score) / 4.0, 50)
         self._curr_score = score
 
-        if lives < 0:
-            reward -= 50
-
         return obs, reward, terminated, truncated, self._enrich_info(info)
 
     def render(self) -> np.ndarray | None:
