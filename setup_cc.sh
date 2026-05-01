@@ -6,7 +6,9 @@
 # The existing Dockerfile and narval_test_sac_cl.sh are unchanged.
 #
 # Usage:
-#   bash setup_cc.sh
+#   bash setup_cc.sh               # full setup (prompts for data download path)
+#   bash setup_cc.sh --no-download # skip datalad download (data pre-staged)
+#   bash setup_cc.sh --no-scenes   # skip mario.scenes download (already have it)
 #
 # Assumptions:
 #   - Repo cloned anywhere under $HOME (e.g. ~/projects/MariHA)
@@ -14,6 +16,14 @@
 #   - Run on a CC cluster node where the module system is available
 
 set -euo pipefail
+
+DOWNLOAD_DATA=true
+NO_SCENES=false
+CUSTOM_DATA_ROOT=false
+for arg in "$@"; do
+  [[ "$arg" == "--no-download" ]] && DOWNLOAD_DATA=false
+  [[ "$arg" == "--no-scenes" ]]   && NO_SCENES=true
+done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}[setup_cc]${NC} $*"; }
@@ -42,9 +52,20 @@ success "Modules loaded."
 if [[ -z "${MARIHA_DATA_ROOT:-}" ]]; then
   export MARIHA_DATA_ROOT="$SCRATCH/MariHA/data"
   warn "MARIHA_DATA_ROOT not set — defaulting to $MARIHA_DATA_ROOT"
-  warn "If your data is elsewhere, re-run with: export MARIHA_DATA_ROOT=/your/path && bash setup_cc.sh"
 else
   info "MARIHA_DATA_ROOT = $MARIHA_DATA_ROOT"
+fi
+
+if [[ "$DOWNLOAD_DATA" == true && -t 0 ]]; then
+  echo ""
+  echo -e "${CYAN}[setup_cc]${NC} Data will be downloaded to: ${YELLOW}$MARIHA_DATA_ROOT${NC}"
+  read -rp "  Press Enter to use this path, or type a new path: " USER_DATA_ROOT
+  if [[ -n "$USER_DATA_ROOT" ]]; then
+    export MARIHA_DATA_ROOT="$USER_DATA_ROOT"
+    CUSTOM_DATA_ROOT=true
+    info "Data root set to: $MARIHA_DATA_ROOT"
+  fi
+  mkdir -p "$MARIHA_DATA_ROOT"
 fi
 
 # ---------------------------------------------------------------------------
@@ -73,7 +94,60 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # ---------------------------------------------------------------------------
-# 5. Install stable-retro from source first, then MariHA without stable-retro
+# 5. Datalad data download
+# ---------------------------------------------------------------------------
+if [[ "$DOWNLOAD_DATA" == true ]]; then
+  if ! command -v datalad &>/dev/null; then
+    info "Installing datalad..."
+    pip install datalad --quiet
+    success "datalad installed."
+  fi
+
+  # mario.stimuli → $MARIHA_DATA_ROOT/mario  (cd into DATA_ROOT first so datalad names it 'mario')
+  if [[ ! -d "$MARIHA_DATA_ROOT/mario/.datalad" ]]; then
+    info "Downloading mario.stimuli → $MARIHA_DATA_ROOT/mario ..."
+    info "(SSH key required for git@github.com)"
+    pushd "$MARIHA_DATA_ROOT" > /dev/null
+    datalad install -s git@github.com:courtois-neuromod/mario.stimuli.git mario
+    popd > /dev/null
+  else
+    info "mario.stimuli already present — skipping install."
+  fi
+  info "Fetching mario.stimuli file content..."
+  pushd "$MARIHA_DATA_ROOT/mario" > /dev/null
+  datalad get .
+  popd > /dev/null
+  success "mario.stimuli ready."
+
+  if [[ "$NO_SCENES" == false ]]; then
+    # mario.scenes → $MARIHA_DATA_ROOT/mario.scenes  (cd into DATA_ROOT so datalad places it there)
+    if [[ ! -d "$MARIHA_DATA_ROOT/mario.scenes/.datalad" ]]; then
+      info "Downloading mario.scenes → $MARIHA_DATA_ROOT/mario.scenes ..."
+      info "(SSH key required for git@github.com)"
+      pushd "$MARIHA_DATA_ROOT" > /dev/null
+      datalad install git@github.com:courtois-neuromod/mario.scenes
+      popd > /dev/null
+      success "mario.scenes installed."
+    else
+      info "mario.scenes already present — skipping install."
+    fi
+
+    info "Checking out dev_refactor and fetching mario.scenes data..."
+    pushd "$MARIHA_DATA_ROOT/mario.scenes" > /dev/null
+    git checkout dev_refactor
+    datalad get .
+    python code/archives/decompress.py
+    popd > /dev/null
+    success "mario.scenes data ready."
+  else
+    info "Skipping mario.scenes (--no-scenes)."
+  fi
+else
+  info "Skipping datalad download (--no-download)."
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Install stable-retro from source first, then MariHA without stable-retro
 #    so pip does not overwrite the source build with the PyPI binary.
 # ---------------------------------------------------------------------------
 info "Installing build tools..."
@@ -89,7 +163,7 @@ info "Installing MariHA (remaining deps, skipping stable-retro)..."
 pip install -e "$REPO_ROOT" --no-deps
 # Install all remaining deps explicitly, excluding stable-retro.
 # ---------------------------------------------------------------------------
-# 6. Install tensorflow with bundled CUDA/cuDNN (CC has no cudnn module)
+# 7. Install tensorflow with bundled CUDA/cuDNN (CC has no cudnn module)
 # ---------------------------------------------------------------------------
 info "Installing tensorflow[and-cuda]..."
 # tensorflow[and-cuda] bundles its own cuDNN — no cudnn module needed on CC.
@@ -102,9 +176,9 @@ pip install \
 success "tensorflow[and-cuda] + remaining deps installed."
 
 # ---------------------------------------------------------------------------
-# 7. Stimuli data check
+# 8. Stimuli data check
 # ---------------------------------------------------------------------------
-STIMULI_DIR="$MARIHA_DATA_ROOT/mario/stimuli/SuperMarioBros-Nes"
+STIMULI_DIR="$MARIHA_DATA_ROOT/mario/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
   warn "Stimuli directory not found: $STIMULI_DIR"
   warn "Set MARIHA_DATA_ROOT correctly and re-run, or run manually later:"
@@ -114,7 +188,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Subject data check
+# 9. Subject data check
 # ---------------------------------------------------------------------------
 SCENES_DIR="$MARIHA_DATA_ROOT/mario.scenes"
 STATE_COUNT=$(find "$SCENES_DIR" -name "*.state.gz" 2>/dev/null | head -1 | wc -l | tr -d ' ')
@@ -126,7 +200,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Generate per-scene scenario files
+# 10. Generate per-scene scenario files
 # ---------------------------------------------------------------------------
 info "Generating per-scene scenario files..."
 if mariha-generate-scenarios; then
@@ -137,7 +211,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. Smoke test
+# 11. Smoke test
 # ---------------------------------------------------------------------------
 info "Running smoke test..."
 python - <<'EOF'
@@ -167,7 +241,7 @@ EOF
 success "Smoke test passed."
 
 # ---------------------------------------------------------------------------
-# 11. Summary
+# 12. Summary
 # ---------------------------------------------------------------------------
 echo ""
 success "Setup complete."
@@ -178,5 +252,9 @@ echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
 echo ""
+if [[ "$CUSTOM_DATA_ROOT" == true ]]; then
+  echo "  (Data path already shown above — add that export to your job scripts too.)"
+  echo ""
+fi
 echo "Then run training with:"
 echo "    mariha-run-cl --subject sub-01 --seed 0"

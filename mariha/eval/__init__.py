@@ -7,17 +7,12 @@
 See ``scripts/evaluate.py`` for the full CLI evaluation pipeline.
 """
 
-from mariha.eval.metrics import (
-    aggregate_behavioral_stats,
-    compute_cl_metrics,
-    summarise_behavioral_metrics,
-)
+from mariha.eval.metrics import build_run_metadata, build_scene_metadata
 from mariha.eval.runner import eval_on_scene, find_task_checkpoints
 
 __all__ = [
-    "aggregate_behavioral_stats",
-    "compute_cl_metrics",
+    "build_run_metadata",
+    "build_scene_metadata",
     "eval_on_scene",
     "find_task_checkpoints",
-    "summarise_behavioral_metrics",
 ]
