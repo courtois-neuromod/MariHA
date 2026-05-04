@@ -68,7 +68,7 @@ class MAS(ParameterRegularizer):
 
         importance: Dict[str, List[tf.Tensor]] = {}
         for gn in self._regularize_groups:
-            gs = tape.jacobian(sq_norms[gn], groups[gn])
+            gs = tape.jacobian(sq_norms[gn], groups[gn], experimental_use_pfor=False)
             per_param: List[tf.Tensor] = []
             for var, g in zip(groups[gn], gs):
                 if g is None:
