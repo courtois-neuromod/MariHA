@@ -103,6 +103,7 @@ class SceneEnv:
         render_mode: str | None = None,
         stimuli_path: Path = STIMULI_PATH,
         scenarios_dir: Path = SCENARIOS_DIR,
+        record_dir: Path | None = None,
     ) -> None:
         self.scene_id = scene_id
         self.exit_point = exit_point
@@ -112,6 +113,7 @@ class SceneEnv:
             render_mode=render_mode,
             stimuli_path=stimuli_path,
             scenarios_dir=scenarios_dir,
+            record_dir=record_dir,
         )
         self.observation_space = self._base.observation_space
         self.action_space = self._base.action_space

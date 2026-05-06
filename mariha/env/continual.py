@@ -61,6 +61,7 @@ def make_scene_env(
     render_mode: str | None = None,
     stimuli_path: Path = STIMULI_PATH,
     scenarios_dir: Path = SCENARIOS_DIR,
+    record_dir: Path | None = None,
 ) -> TaskIdWrapper:
     """Build and return a fully-wrapped scene environment.
 
@@ -87,6 +88,7 @@ def make_scene_env(
         render_mode=render_mode,
         stimuli_path=stimuli_path,
         scenarios_dir=scenarios_dir,
+        record_dir=record_dir,
     )
     env = ActionWrapper(env)
     env = FrameSkipWrapper(env, n_skip=4)

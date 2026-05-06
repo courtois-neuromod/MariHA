@@ -160,6 +160,7 @@ class MarioEnv:
         render_mode: str | None = None,
         stimuli_path: Path = STIMULI_PATH,
         scenarios_dir: Path = SCENARIOS_DIR,
+        record_dir: Path | None = None,
     ) -> None:
         self.scene_id = scene_id
         self._render_mode = render_mode
@@ -179,6 +180,7 @@ class MarioEnv:
             inttype=retro.data.Integrations.CUSTOM_ONLY,
             render_mode=render_mode,
             scenario=str(scenario_file),
+            record=str(record_dir) if record_dir is not None else False,
         )
 
         # Pre-install a scaled viewer so the ``human`` render window opens at
