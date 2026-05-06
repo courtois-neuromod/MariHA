@@ -89,6 +89,8 @@ class SceneEnv:
         render_mode: Passed through to ``MarioEnv``.
         stimuli_path: Override for the stimuli directory path.
         scenarios_dir: Override for the scenario files directory.
+        record_dir: If set, passed to ``MarioEnv`` to enable stable-retro
+            BK2 recording.  ``None`` (default) disables recording.
 
     Attributes:
         observation_space: Observation space of the underlying env.

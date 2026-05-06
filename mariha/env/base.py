@@ -146,6 +146,8 @@ class MarioEnv:
         stimuli_path: Override path to the stimuli directory.  Defaults to
             ``MariHA/data/mario/stimuli``.
         scenarios_dir: Override path to the scenario files directory.
+        record_dir: If set, stable-retro records all frames to a ``.bk2``
+            file in this directory.  ``None`` (default) disables recording.
 
     Attributes:
         observation_space: gymnasium observation space (H × W × C uint8 pixels).

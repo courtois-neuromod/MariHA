@@ -78,6 +78,8 @@ def make_scene_env(
         render_mode: Render mode for ``MarioEnv``.
         stimuli_path: Override for the stimuli directory.
         scenarios_dir: Override for the scenario files directory.
+        record_dir: If set, enables stable-retro BK2 recording into this
+            directory.  ``None`` (default) disables recording.
 
     Returns:
         A ``TaskIdWrapper``-wrapped env ready for the training loop.
