@@ -56,6 +56,11 @@ else
   info "MARIHA_DATA_ROOT = $MARIHA_DATA_ROOT"
 fi
 
+export MARIHA_REPO="$REPO_ROOT"
+export MARIHA_EXPERIMENT_DIR="$REPO_ROOT/experiments"
+info "MARIHA_REPO = $MARIHA_REPO"
+info "MARIHA_EXPERIMENT_DIR = $MARIHA_EXPERIMENT_DIR"
+
 if [[ "$DOWNLOAD_DATA" == true && -t 0 ]]; then
   echo ""
   echo -e "${CYAN}[setup_cc]${NC} Data will be downloaded to: ${YELLOW}$MARIHA_DATA_ROOT${NC}"
@@ -249,6 +254,8 @@ echo ""
 echo "    module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0 git-annex/10.20231129"
 echo "    source $VENV_DIR/bin/activate"
 echo "    export MARIHA_DATA_ROOT=$MARIHA_DATA_ROOT"
+echo "    export MARIHA_REPO=$MARIHA_REPO"
+echo "    export MARIHA_EXPERIMENT_DIR=$MARIHA_EXPERIMENT_DIR"
 echo ""
 if [[ "$CUSTOM_DATA_ROOT" == true ]]; then
   echo "  (Data path already shown above — add that export to your job scripts too.)"
