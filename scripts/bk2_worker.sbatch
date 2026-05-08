@@ -14,7 +14,7 @@ RUN_ID=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$JOB_LIST")
 
 echo "=== Task ${SLURM_ARRAY_TASK_ID}: $RUN_LABEL | $RUN_PREFIX | $RUN_ID ==="
 
-module load StdEnv/2023 python/3.12 cmake gcc cuda/12.2 opencv/4.13.0
+module load StdEnv/2023 python/3.12 cmake gcc opencv/4.13.0
 export PYTHONPATH="$EBROOTOPENCV/lib/python3.12/site-packages:${PYTHONPATH:-}"
 export MARIHA_DATA_ROOT="${MARIHA_DATA_ROOT:-$SCRATCH/MariHA/data}"
 

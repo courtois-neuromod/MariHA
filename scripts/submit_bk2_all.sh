@@ -60,10 +60,10 @@ fi
 # Collect run_ids from data directory (canonical chronological order)
 # --------------------------------------------------------------------------- #
 mapfile -t RUN_IDS < <(
-    find "$SCENES_ROOT/$SUBJECT" -name "*_events.tsv" \
+    find "$SCENES_ROOT/$SUBJECT" -name "*_desc-scenes_events.tsv" \
         | grep -oP 'ses-\d+_.*_run-\d+' \
         | sed 's/_task-mario//' \
-        | sort
+        | sort -u
 )
 
 if [[ ${#RUN_IDS[@]} -eq 0 ]]; then
@@ -110,7 +110,8 @@ for rl_dir in "$CHECKPOINT_ROOT/${AGENT}" "$CHECKPOINT_ROOT/${AGENT}_"*/; do
         fi
 
         # Write a job list of 84 run_ids for this (run_label, prefix)
-        JOB_LIST="$(mktemp /tmp/bk2_${run_label}_XXXX.txt)"
+        # Use $REPO/logs (shared FS) — /tmp is node-local on Compute Canada
+        JOB_LIST="$(mktemp "$REPO/logs/bk2_${run_label}_XXXX.txt")"
         printf "%s\n" "${RUN_IDS[@]}" > "$JOB_LIST"
 
         if $DRY_RUN; then
