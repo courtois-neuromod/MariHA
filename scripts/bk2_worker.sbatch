@@ -4,8 +4,8 @@
 #SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --output=logs/bk2_%A_%a.out
-#SBATCH --error=logs/bk2_%A_%a.err
+#SBATCH --output=logs/bk2_%x_%A_%a.out
+#SBATCH --error=logs/bk2_%x_%A_%a.err
 
 # Each array task reads its run_id from the job list (one run_id per line).
 # RUN_LABEL, AGENT, CL_METHOD, RUN_PREFIX, SUBJECT, EXPERIMENT_DIR are exported
