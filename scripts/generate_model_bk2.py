@@ -220,6 +220,7 @@ def main() -> None:
                 record_dir=tmpdir_path,
             )
             try:
+                spec.max_steps = int(1e9)  # no frame cap during eval — play until done or dead
                 obs, info = env.reset(episode_spec=spec)
                 one_hot = info["task_one_hot"]
                 done = False
