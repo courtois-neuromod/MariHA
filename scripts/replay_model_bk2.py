@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Replay model BK2 files and produce mp4, variables, state, and summary outputs.
+"""Replay model BK2 files and produce mp4 or gif, variables, state, and summary outputs.
 
 Outputs are written next to each .bk2 file:
-    <name>_recording.mp4
+    <name>_recording.mp4  (default)
+    <name>_recording.gif  (with --gif)
     <name>_variables.json
     <name>.state
     <name>_summary.json
 
 Usage:
-    python scripts/replay_model_bk2.py --bk2_dir <path> [-v]
+    python scripts/replay_model_bk2.py --bk2_dir <path> [-v] [--gif] [--gif-fps 24] [--gif-scale W]
 """
 
 from __future__ import annotations
@@ -103,6 +104,38 @@ def write_mp4(frames: list[np.ndarray], out_path: Path) -> None:
             os.unlink(tmp_path)
 
 
+def write_gif(frames: list[np.ndarray], out_path: Path, fps: int = 24, scale: int = 256) -> None:
+    """Write RGB frames to a GIF via ffmpeg palette method."""
+    if not frames:
+        return
+    h, w = frames[0].shape[:2]
+    with tempfile.NamedTemporaryFile(suffix=".avi", delete=False) as tmp:
+        tmp_path = tmp.name
+    palette_path = tmp_path + "_palette.png"
+    try:
+        writer = cv2.VideoWriter(tmp_path, cv2.VideoWriter_fourcc(*"MJPG"), FPS, (w, h))
+        for frame in frames:
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        writer.release()
+        vf_base = f"fps={fps},scale={scale}:-1:flags=lanczos"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", tmp_path, "-vf", f"{vf_base},palettegen", palette_path],
+            check=True, capture_output=True, stdin=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", tmp_path, "-i", palette_path,
+                "-filter_complex", f"{vf_base}[x];[x][1:v]paletteuse",
+                str(out_path),
+            ],
+            check=True, capture_output=True, stdin=subprocess.DEVNULL,
+        )
+    finally:
+        for p in (tmp_path, palette_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
 def build_variables(infos: list[dict]) -> dict:
     """Convert list of per-frame info dicts to a dict of lists."""
     if not infos:
@@ -111,14 +144,14 @@ def build_variables(infos: list[dict]) -> dict:
     return {k: [float(d.get(k, 0)) for d in infos] for k in keys}
 
 
-def process_bk2(bk2_path: Path) -> None:
+def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale: int = 256) -> None:
     stem = bk2_path.stem
-    mp4_path = bk2_path.parent / f"{stem}_recording.mp4"
+    video_path = bk2_path.parent / f"{stem}_recording.{'gif' if gif else 'mp4'}"
     state_path = bk2_path.parent / f"{stem}.state"
     vars_path = bk2_path.parent / f"{stem}_variables.json"
     summary_path = bk2_path.parent / f"{stem}_summary.json"
 
-    if all(p.exists() for p in [mp4_path, state_path, vars_path, summary_path]):
+    if all(p.exists() for p in [video_path, state_path, vars_path, summary_path]):
         logging.info("Skipping (already exists): %s", bk2_path.name)
         return
 
@@ -126,7 +159,10 @@ def process_bk2(bk2_path: Path) -> None:
     frames, infos, initial_state = replay_bk2(bk2_path)
     logging.info("  %d frames captured", len(frames))
 
-    write_mp4(frames, mp4_path)
+    if gif:
+        write_gif(frames, video_path, fps=gif_fps, scale=gif_scale)
+    else:
+        write_mp4(frames, video_path)
 
     with gzip.open(state_path, "wb") as fh:
         fh.write(initial_state)
@@ -149,6 +185,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay model BK2 files.")
     parser.add_argument("--bk2_dir", required=True, help="Directory containing .bk2 files.")
     parser.add_argument("-v", "--verbose", action="count", default=0)
+    parser.add_argument("--gif", action="store_true", help="Output GIF instead of MP4.")
+    parser.add_argument("--gif-fps", type=int, default=24, help="GIF frame rate (default: 24).")
+    parser.add_argument("--gif-scale", type=int, default=256, help="GIF width in pixels (default: 256).")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -169,7 +208,7 @@ def main() -> None:
     for i, bk2_path in enumerate(bk2_files, 1):
         print(f"[{i}/{len(bk2_files)}] {bk2_path.name}")
         try:
-            process_bk2(bk2_path)
+            process_bk2(bk2_path, gif=args.gif, gif_fps=args.gif_fps, gif_scale=args.gif_scale)
         except Exception as e:
             msg = f"ERROR {bk2_path.name}: {e}\n{traceback.format_exc()}"
             logging.error(msg)
