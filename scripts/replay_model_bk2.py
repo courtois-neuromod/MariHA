@@ -122,14 +122,19 @@ def write_gif(frames: list[np.ndarray], out_path: Path, fps: int = 24, scale: in
             ["ffmpeg", "-y", "-i", tmp_path, "-vf", f"{vf_base},palettegen", palette_path],
             check=True, capture_output=True, stdin=subprocess.DEVNULL,
         )
-        subprocess.run(
+        result = subprocess.run(
             [
                 "ffmpeg", "-y", "-i", tmp_path, "-i", palette_path,
-                "-filter_complex", f"{vf_base}[x];[x][1:v]paletteuse",
+                "-filter_complex", f"[0:v]{vf_base}[x];[x][1:v]paletteuse",
                 str(out_path),
             ],
-            check=True, capture_output=True, stdin=subprocess.DEVNULL,
+            capture_output=True, stdin=subprocess.DEVNULL,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args,
+                output=result.stdout, stderr=result.stderr,
+            )
     finally:
         for p in (tmp_path, palette_path):
             if os.path.exists(p):
