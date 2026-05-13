@@ -32,6 +32,10 @@ import stable_retro as retro
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mariha.env.base import GAME_NAME, STIMULI_PATH
 
+_MARIO_SCENES_CODE = Path(__file__).resolve().parents[1] / "data" / "mario.scenes" / "code"
+sys.path.insert(0, str(_MARIO_SCENES_CODE))
+from utils import compute_clip_stats
+
 FPS = 60.1  # approximate NES frame rate
 
 
@@ -45,8 +49,8 @@ def parse_bk2_name(stem: str) -> dict:
     return parts
 
 
-def replay_bk2(bk2_path: Path) -> tuple[list, list, bytes]:
-    """Replay a bk2 and return (frames, infos, initial_state_bytes)."""
+def replay_bk2(bk2_path: Path) -> tuple[list, list, bytes, list, list]:
+    """Replay a bk2 and return (frames, infos, initial_state_bytes, all_keys, button_names)."""
     movie = retro.Movie(str(bk2_path))
     movie.step()  # advance to first frame to read initial state
 
@@ -60,21 +64,24 @@ def replay_bk2(bk2_path: Path) -> tuple[list, list, bytes]:
     env.initial_state = initial_state
     env.reset()
 
-    n_buttons = env.action_space.n
+    button_names: list = getattr(env.unwrapped, "buttons", []) or []
+    n_buttons = len(button_names) if button_names else env.action_space.n
     frames: list[np.ndarray] = []
     infos: list[dict] = []
+    all_keys: list[list] = []
 
     while movie.step():
-        keys = np.array([movie.get_key(i, 0) for i in range(n_buttons)], dtype=np.uint8)
-        obs, _, _, _, _ = env.step(keys)
+        keys = [movie.get_key(i, 0) for i in range(n_buttons)]
+        obs, _, _, _, _ = env.step(np.array(keys, dtype=np.uint8))
         frames.append(obs)
         info = env.data.lookup_all()
         info["x_pos"] = int(info.get("player_x_posHi", 0)) * 256 + int(info.get("player_x_posLo", 0))
         infos.append(info)
+        all_keys.append(keys)
 
     env.close()
     movie.close()
-    return frames, infos, initial_state
+    return frames, infos, initial_state, all_keys, button_names
 
 
 def write_mp4(frames: list[np.ndarray], out_path: Path) -> None:
@@ -141,12 +148,36 @@ def write_gif(frames: list[np.ndarray], out_path: Path, fps: int = 24, scale: in
                 os.unlink(p)
 
 
-def build_variables(infos: list[dict]) -> dict:
-    """Convert list of per-frame info dicts to a dict of lists."""
+def build_variables(infos: list[dict], all_keys: list, button_names: list) -> dict:
+    """Convert per-frame info dicts + button states to a dict of lists."""
     if not infos:
         return {}
-    keys = list(infos[0].keys())
-    return {k: [float(d.get(k, 0)) for d in infos] for k in keys}
+    variables = {k: [float(d.get(k, 0)) for d in infos] for k in infos[0]}
+    for i, btn in enumerate(button_names):
+        if btn is not None:
+            variables[f"button_{btn}"] = [int(row[i]) for row in all_keys]
+    return variables
+
+
+def _detect_outcome(infos: list[dict]) -> str:
+    """Return 'death' or 'completed' by scanning per-frame game variables."""
+    for i in range(1, len(infos)):
+        ps_curr = infos[i].get("player_state", 0)
+        ps_prev = infos[i - 1].get("player_state", 0)
+        lives_curr = infos[i].get("lives", 0)
+        lives_prev = infos[i - 1].get("lives", 0)
+        if (ps_curr == 11 and ps_prev != 11) or lives_curr < lives_prev:
+            return "death"
+    return "completed"
+
+
+def _build_scene_id(level: str, scene: str) -> str:
+    """Reconstruct SceneID (e.g. 'w1l1s3') from level '1-1' and scene '3'."""
+    try:
+        world, level_num = level.split("-")
+        return f"w{world}l{level_num}s{int(scene)}"
+    except Exception:
+        return f"level{level}s{scene}"
 
 
 def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale: int = 256) -> None:
@@ -161,7 +192,7 @@ def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale:
         return
 
     logging.info("Replaying: %s", bk2_path.name)
-    frames, infos, initial_state = replay_bk2(bk2_path)
+    frames, infos, initial_state, all_keys, button_names = replay_bk2(bk2_path)
     logging.info("  %d frames captured", len(frames))
 
     if gif:
@@ -172,15 +203,39 @@ def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale:
     with gzip.open(state_path, "wb") as fh:
         fh.write(initial_state)
 
+    variables = build_variables(infos, all_keys, button_names)
     with open(vars_path, "w") as f:
-        json.dump(build_variables(infos), f)
+        json.dump(variables, f)
 
     meta = parse_bk2_name(stem)
+    clip_code = meta.get("clip", "")
+    level = meta.get("level", "")
+    scene = meta.get("scene", "")
+    # clip_code encodes SSSRRBBNNNNNNN — run is digits [3:5]
+    run = clip_code[3:5] if len(clip_code) >= 5 else None
+
+    clip_stats = {}
+    try:
+        clip_stats = compute_clip_stats(variables)
+    except Exception as e:
+        logging.warning("compute_clip_stats failed: %s", e)
+
     summary = {
-        "SourceBk2": bk2_path.name,
-        "NumFrames": len(frames),
+        "Subject": meta.get("sub"),
+        "Session": meta.get("ses"),
+        "Run": run,
+        "Level": level,
+        "SceneID": _build_scene_id(level, scene),
+        "ClipCode": clip_code,
+        "StartFrame": 0,
+        "EndFrame": len(frames),
         "Duration": round(len(frames) / FPS, 3),
-        **{k: meta.get(k) for k in ("sub", "ses", "level", "scene", "clip", "model") if k in meta},
+        "Outcome": _detect_outcome(infos),
+        "Phase": None,
+        "SourceBk2": bk2_path.name,
+        "GameName": GAME_NAME,
+        "Model": meta.get("model"),
+        **clip_stats,
     }
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=4)
