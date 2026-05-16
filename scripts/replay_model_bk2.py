@@ -172,12 +172,21 @@ def _detect_outcome(infos: list[dict]) -> str:
 
 
 def _build_scene_id(level: str, scene: str) -> str:
-    """Reconstruct SceneID (e.g. 'w1l1s3') from level '1-1' and scene '3'."""
+    """Reconstruct SceneID (e.g. 'w1l1s3') from level 'w1l1' and scene '3'."""
     try:
-        world, level_num = level.split("-")
-        return f"w{world}l{level_num}s{int(scene)}"
+        return f"{level}s{int(scene)}"
     except Exception:
-        return f"level{level}s{scene}"
+        return f"{level}s{scene}"
+
+
+_DISCOVERY_SESSIONS = {str(i).zfill(3) for i in range(1, 7)}
+
+
+def _phase_from_session(ses: str | None) -> str | None:
+    """Return 'discovery' for ses-001–006, 'practice' for ses-007+."""
+    if ses is None:
+        return None
+    return "discovery" if ses.zfill(3) in _DISCOVERY_SESSIONS else "practice"
 
 
 def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale: int = 256) -> None:
@@ -231,7 +240,7 @@ def process_bk2(bk2_path: Path, gif: bool = False, gif_fps: int = 24, gif_scale:
         "EndFrame": len(frames),
         "Duration": round(len(frames) / FPS, 3),
         "Outcome": _detect_outcome(infos),
-        "Phase": None,
+        "Phase": _phase_from_session(meta.get("ses")),
         "SourceBk2": bk2_path.name,
         "GameName": GAME_NAME,
         "Model": meta.get("model"),

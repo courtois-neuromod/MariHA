@@ -110,8 +110,8 @@ for rl_dir in "$CHECKPOINT_ROOT/${AGENT}" "$CHECKPOINT_ROOT/${AGENT}_"*/; do
         fi
 
         # Write a job list of 84 run_ids for this (run_label, prefix)
-        # Use $REPO/logs (shared FS) — /tmp is node-local on Compute Canada
-        JOB_LIST="$(mktemp "$REPO/logs/bk2_${run_label}_XXXX.txt")"
+        # Use a deterministic name so the file is stable across job start delays.
+        JOB_LIST="$REPO/logs/bk2_${run_label}_${prefix}.txt"
         printf "%s\n" "${RUN_IDS[@]}" > "$JOB_LIST"
 
         if $DRY_RUN; then
