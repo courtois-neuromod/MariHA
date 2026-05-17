@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# setup_cc.sh — MariHA setup for Compute Canada (no apptainer)
+# setup_hpc.sh — MariHA setup for HPC clusters (no apptainer)
 #
 # Alternative to the apptainer workflow. Uses a plain Python venv and installs
 # stable-retro from source (the PyPI binary does not work on CC).
 # The existing Dockerfile and narval_test_sac_cl.sh are unchanged.
 #
 # Usage:
-#   bash setup_cc.sh               # full setup (prompts for data download path)
-#   bash setup_cc.sh --no-download # skip datalad download (data pre-staged)
-#   bash setup_cc.sh --no-scenes   # skip mario.scenes download (already have it)
+#   bash setup_hpc.sh               # full setup (prompts for data download path)
+#   bash setup_hpc.sh --no-download # skip datalad download (data pre-staged)
+#   bash setup_hpc.sh --no-scenes   # skip mario.scenes download (already have it)
 #
 # Assumptions:
 #   - Repo cloned anywhere under $HOME (e.g. ~/projects/MariHA)
 #   - Data lives (or will live) at $SCRATCH/MariHA/data
-#   - Run on a CC cluster node where the module system is available
+#   - Run on an HPC cluster node where the module system is available
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ for arg in "$@"; do
 done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()    { echo -e "${CYAN}[setup_cc]${NC} $*"; }
+info()    { echo -e "${CYAN}[setup_hpc]${NC} $*"; }
 success() { echo -e "${GREEN}[ok]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[warn]${NC} $*"; }
 die()     { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
@@ -63,7 +63,7 @@ info "MARIHA_EXPERIMENT_DIR = $MARIHA_EXPERIMENT_DIR"
 
 if [[ "$DOWNLOAD_DATA" == true && -t 0 ]]; then
   echo ""
-  echo -e "${CYAN}[setup_cc]${NC} Data will be downloaded to: ${YELLOW}$MARIHA_DATA_ROOT${NC}"
+  echo -e "${CYAN}[setup_hpc]${NC} Data will be downloaded to: ${YELLOW}$MARIHA_DATA_ROOT${NC}"
   read -rp "  Press Enter to use this path, or type a new path: " USER_DATA_ROOT
   if [[ -n "$USER_DATA_ROOT" ]]; then
     export MARIHA_DATA_ROOT="$USER_DATA_ROOT"
@@ -135,9 +135,8 @@ if [[ "$DOWNLOAD_DATA" == true ]]; then
       info "mario.scenes already present — skipping install."
     fi
 
-    info "Checking out dev_refactor and fetching mario.scenes data..."
+    info "Fetching mario.scenes data..."
     pushd "$MARIHA_DATA_ROOT/mario.scenes" > /dev/null
-    git checkout dev_refactor
     datalad get .
     python code/archives/decompress.py
     popd > /dev/null
@@ -185,7 +184,7 @@ STIMULI_DIR="$MARIHA_DATA_ROOT/mario/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
   warn "Stimuli directory not found: $STIMULI_DIR"
   warn "Set MARIHA_DATA_ROOT correctly and re-run, or run manually later:"
-  warn "  export MARIHA_DATA_ROOT=/your/path && bash setup_cc.sh"
+  warn "  export MARIHA_DATA_ROOT=/your/path && bash setup_hpc.sh"
 else
   success "Stimuli directory found."
 fi

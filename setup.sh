@@ -174,9 +174,8 @@ if [[ "$DOWNLOAD_DATA" == true ]]; then
       info "mario.scenes already present — skipping install."
     fi
 
-    info "Checking out dev_refactor and fetching mario.scenes data..."
+    info "Fetching mario.scenes data..."
     pushd "$DATA_ROOT/mario.scenes" > /dev/null
-    git checkout dev_refactor
     "$DATALAD" get .
     "$PYTHON_VENV" code/archives/decompress.py
     popd > /dev/null

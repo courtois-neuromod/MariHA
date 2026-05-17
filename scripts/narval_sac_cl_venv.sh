@@ -8,11 +8,11 @@
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:a100:1
 
-# No-apptainer variant: uses the plain venv created by setup_cc.sh.
+# No-apptainer variant: uses the plain venv created by setup_hpc.sh.
 # Assumes:
 #   - Repo cloned to $HOME/projects/MariHA (or wherever)
 #   - Data on $SCRATCH/MariHA/data
-#   - setup_cc.sh already run once to create the venv
+#   - setup_hpc.sh already run once to create the venv
 
 mkdir -p logs
 

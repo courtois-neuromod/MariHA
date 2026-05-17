@@ -268,17 +268,17 @@ cd $HOME/GitHub
 git clone <repo-url> MariHA
 cd MariHA
 
-# Run CC-specific setup (loads modules, clones stable-retro,
+# Run HPC-specific setup (loads modules, clones stable-retro,
 # creates venv, installs MariHA, generates scenario files)
-bash setup_cc.sh
+bash setup_hpc.sh
 ```
 
-By default `setup_cc.sh` expects data at `$SCRATCH/MariHA/data`. If your data
+By default `setup_hpc.sh` expects data at `$SCRATCH/MariHA/data`. If your data
 lives somewhere else, just export the variable before running:
 
 ```bash
 export MARIHA_DATA_ROOT=/path/to/your/data
-bash setup_cc.sh
+bash setup_hpc.sh
 ```
 
 **Pull data** (if not already done):
