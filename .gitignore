@@ -76,3 +76,6 @@ dmypy.json
 # Logs
 *.log
 
+# PlotNeuralNet — cloned on demand by scripts/generate_architecture_diagram.py
+/PlotNeuralNet/
+
