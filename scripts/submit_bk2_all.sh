@@ -11,6 +11,7 @@
 #   --run_prefix   <prefix>             only this prefix (default: all found)
 #   --experiment_dir <path>             (default: $SCRATCH/MariHA/experiments)
 #   --output_root  <path>               output root for BK2 files (default: same as experiment_dir)
+#   --cl_method    <method>             only submit for this CL method (default: all found)
 #   --dry-run                           print job list, do not submit
 
 set -euo pipefail
@@ -21,6 +22,7 @@ set -euo pipefail
 AGENT=""
 SUBJECT="sub-01"
 FILTER_PREFIX=""
+FILTER_CL_METHOD=""
 DRY_RUN=false
 EXPERIMENT_DIR="${MARIHA_EXPERIMENT_DIR:-${SCRATCH:-$HOME}/MariHA/experiments}"
 OUTPUT_ROOT=""
@@ -30,6 +32,7 @@ while [[ $# -gt 0 ]]; do
         --agent)         AGENT="$2";            shift 2 ;;
         --subject)       SUBJECT="$2";          shift 2 ;;
         --run_prefix)    FILTER_PREFIX="$2";    shift 2 ;;
+        --cl_method)     FILTER_CL_METHOD="$2"; shift 2 ;;
         --experiment_dir) EXPERIMENT_DIR="$2";  shift 2 ;;
         --output_root)   OUTPUT_ROOT="$2";      shift 2 ;;
         --dry-run)       DRY_RUN=true;          shift   ;;
@@ -92,6 +95,11 @@ for rl_dir in "$CHECKPOINT_ROOT/${AGENT}" "$CHECKPOINT_ROOT/${AGENT}_"*/; do
         cl_method="${run_label#${AGENT}_}"
     else
         cl_method=""
+    fi
+
+    # Honour --cl_method filter if given
+    if [[ -n "$FILTER_CL_METHOD" && "$cl_method" != "$FILTER_CL_METHOD" ]]; then
+        continue
     fi
 
     # Collect unique run_prefixes (strip _taskN suffix)
