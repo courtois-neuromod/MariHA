@@ -5,11 +5,14 @@
 # the per-scene scenario files, and smoke-tests the installation.
 #
 # Usage:
-#   bash setup.sh            # full setup
-#   bash setup.sh --no-data  # skip data availability check (CI / no dataset)
+#   bash setup.sh               # full setup (prompts for data download path)
+#   bash setup.sh --no-data     # skip data availability check (CI / no dataset)
+#   bash setup.sh --no-download # skip datalad download (data already staged)
+#   bash setup.sh --no-scenes   # skip mario.scenes download (already have it)
 #
 # Requirements:
 #   - Python 3.9+
+#   - SSH key configured for github.com (for datalad download)
 #   - git-annex (optional, for pulling subject data files)
 
 set -euo pipefail
@@ -27,9 +30,14 @@ die()     { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
 # Parse flags
 # ---------------------------------------------------------------------------
 CHECK_DATA=true
+DOWNLOAD_DATA=true
+NO_SCENES=false
+CUSTOM_DATA_ROOT=false
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 for arg in "$@"; do
-  [[ "$arg" == "--no-data" ]] && CHECK_DATA=false
+  [[ "$arg" == "--no-data" ]]     && CHECK_DATA=false && DOWNLOAD_DATA=false
+  [[ "$arg" == "--no-download" ]] && DOWNLOAD_DATA=false
+  [[ "$arg" == "--no-scenes" ]]   && NO_SCENES=true
 done
 
 # ---------------------------------------------------------------------------
@@ -38,6 +46,21 @@ done
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 DATA_ROOT="${MARIHA_DATA_ROOT:-$REPO_ROOT/data}"
+
+# ---------------------------------------------------------------------------
+# Prompt for data download path (interactive only, skipped with --no-download)
+# ---------------------------------------------------------------------------
+if [[ "$DOWNLOAD_DATA" == true && -t 0 ]]; then
+  echo ""
+  echo -e "${CYAN}[setup]${NC} Data will be downloaded to: ${YELLOW}$DATA_ROOT${NC}"
+  read -rp "  Press Enter to use this path, or type a new path: " USER_DATA_ROOT
+  if [[ -n "$USER_DATA_ROOT" ]]; then
+    DATA_ROOT="$USER_DATA_ROOT"
+    CUSTOM_DATA_ROOT=true
+    info "Data root set to: $DATA_ROOT"
+  fi
+  mkdir -p "$DATA_ROOT"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Ensure uv is available
@@ -111,9 +134,64 @@ if "$PYTHON_VENV" -c "import tensorflow as tf; v=tf.__version__; parts=v.split('
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Stimuli data check
+# 5. Datalad data download
 # ---------------------------------------------------------------------------
-STIMULI_DIR="$DATA_ROOT/mario/stimuli/SuperMarioBros-Nes"
+if [[ "$DOWNLOAD_DATA" == true ]]; then
+  info "Setting up datalad..."
+  if ! "$VENV_DIR/bin/datalad" --version &>/dev/null 2>&1; then
+    info "datalad not found — installing into venv..."
+    uv pip install --python "$PYTHON_VENV" datalad --quiet
+    success "datalad installed."
+  fi
+  DATALAD="$VENV_DIR/bin/datalad"
+
+  # mario.stimuli → $DATA_ROOT/mario  (cd into DATA_ROOT first so datalad names it 'mario')
+  if [[ ! -d "$DATA_ROOT/mario/.datalad" ]]; then
+    info "Downloading mario.stimuli → $DATA_ROOT/mario ..."
+    info "(SSH key required for git@github.com)"
+    pushd "$DATA_ROOT" > /dev/null
+    "$DATALAD" install -s git@github.com:courtois-neuromod/mario.stimuli.git mario
+    popd > /dev/null
+  else
+    info "mario.stimuli already present — skipping install."
+  fi
+  info "Fetching mario.stimuli file content..."
+  pushd "$DATA_ROOT/mario" > /dev/null
+  "$DATALAD" get .
+  popd > /dev/null
+  success "mario.stimuli ready."
+
+  if [[ "$NO_SCENES" == false ]]; then
+    # mario.scenes → $DATA_ROOT/mario.scenes  (cd into DATA_ROOT so datalad places it there)
+    if [[ ! -d "$DATA_ROOT/mario.scenes/.datalad" ]]; then
+      info "Downloading mario.scenes → $DATA_ROOT/mario.scenes ..."
+      info "(SSH key required for git@github.com)"
+      pushd "$DATA_ROOT" > /dev/null
+      "$DATALAD" install git@github.com:courtois-neuromod/mario.scenes
+      popd > /dev/null
+      success "mario.scenes installed."
+    else
+      info "mario.scenes already present — skipping install."
+    fi
+
+    info "Checking out dev_refactor and fetching mario.scenes data..."
+    pushd "$DATA_ROOT/mario.scenes" > /dev/null
+    git checkout dev_refactor
+    "$DATALAD" get .
+    "$PYTHON_VENV" code/archives/decompress.py
+    popd > /dev/null
+    success "mario.scenes data ready."
+  else
+    info "Skipping mario.scenes (--no-scenes)."
+  fi
+else
+  info "Skipping datalad download (--no-download)."
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Stimuli data check
+# ---------------------------------------------------------------------------
+STIMULI_DIR="$DATA_ROOT/mario/SuperMarioBros-Nes"
 if [[ ! -d "$STIMULI_DIR" ]]; then
   die "Stimuli directory not found: $STIMULI_DIR
   The Mario game integration must be present in data/mario/stimuli/.
@@ -122,7 +200,7 @@ fi
 success "Stimuli directory found."
 
 # ---------------------------------------------------------------------------
-# 5. Subject data (git-annex)
+# 7. Subject data (git-annex)
 # ---------------------------------------------------------------------------
 SCENES_DIR="$DATA_ROOT/mario.scenes"
 if [[ "$CHECK_DATA" == true ]]; then
@@ -151,7 +229,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Generate scenario files
+# 8. Generate scenario files
 # ---------------------------------------------------------------------------
 info "Generating per-scene scenario files..."
 if "$VENV_DIR/bin/mariha-generate-scenarios" 2>/dev/null; then
@@ -162,7 +240,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Smoke test
+# 9. Smoke test
 # ---------------------------------------------------------------------------
 info "Running smoke test..."
 "$PYTHON_VENV" - <<'EOF'
@@ -182,16 +260,12 @@ except Exception as e:
     errors.append(f"import SAC/models: {e}")
 
 try:
-    from mariha.methods import (
-        L2_SAC, EWC_SAC, MAS_SAC, SI_SAC, OWL_SAC,
-        PackNet_SAC, AGEM_SAC, VCL_SAC, DER_SAC,
-        ClonEx_SAC, MultiTask_SAC,
-    )
+    from mariha.methods import EWC, L2Regularizer, AGEM, DER, PackNet, SI, MAS, ClonEx, MultiTask
 except Exception as e:
     errors.append(f"import methods: {e}")
 
 try:
-    from mariha.eval import compute_cl_metrics, eval_on_scene
+    from mariha.eval import eval_on_scene, build_scene_metadata
 except Exception as e:
     errors.append(f"import eval: {e}")
 
@@ -221,15 +295,20 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "${GREEN}  MariHA setup complete.${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+if [[ "$CUSTOM_DATA_ROOT" == true ]]; then
+  echo "  Data path (add to ~/.bashrc for training scripts):"
+  echo "    export MARIHA_DATA_ROOT=$DATA_ROOT"
+  echo ""
+fi
 echo "  Activate the environment:"
 echo "    source env/bin/activate"
 echo ""
 echo "  Train (full CL curriculum):"
-echo "    mariha-run-cl --agent ewc --subject sub-01 --seed 0"
+echo "    mariha-run-cl --agent sac --cl_method ewc --subject sub-01 --seed 0"
 echo ""
 echo "  Train (single scene):"
 echo "    mariha-run-single --agent sac --scene_id w1l1s0 --seed 0"
 echo ""
 echo "  Evaluate:"
-echo "    mariha-evaluate --subject sub-01 --agent ewc --run_prefix <timestamp_seed0>"
+echo "    mariha-evaluate --subject sub-01 --agent sac --cl_method ewc --run_prefix <timestamp_seed0>"
 echo ""

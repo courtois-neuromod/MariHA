@@ -42,6 +42,7 @@ from mariha.env.base import STIMULI_PATH, SCENARIOS_DIR
 from mariha.env.scene import SceneEnv
 from mariha.env.wrappers.action import ActionWrapper
 from mariha.env.wrappers.observation import (
+    FrameSkipWrapper,
     FrameStackWrapper,
     GrayscaleWrapper,
     ResizeWrapper,
@@ -60,6 +61,7 @@ def make_scene_env(
     render_mode: str | None = None,
     stimuli_path: Path = STIMULI_PATH,
     scenarios_dir: Path = SCENARIOS_DIR,
+    record_dir: Path | None = None,
 ) -> TaskIdWrapper:
     """Build and return a fully-wrapped scene environment.
 
@@ -76,6 +78,8 @@ def make_scene_env(
         render_mode: Render mode for ``MarioEnv``.
         stimuli_path: Override for the stimuli directory.
         scenarios_dir: Override for the scenario files directory.
+        record_dir: If set, enables stable-retro BK2 recording into this
+            directory.  ``None`` (default) disables recording.
 
     Returns:
         A ``TaskIdWrapper``-wrapped env ready for the training loop.
@@ -86,8 +90,10 @@ def make_scene_env(
         render_mode=render_mode,
         stimuli_path=stimuli_path,
         scenarios_dir=scenarios_dir,
+        record_dir=record_dir,
     )
     env = ActionWrapper(env)
+    env = FrameSkipWrapper(env, n_skip=4)
     env = GrayscaleWrapper(env)
     env = ResizeWrapper(env)
     env = FrameStackWrapper(env)

@@ -144,3 +144,31 @@ scenes) is never fully computed — for 313 scenes this would require
   (``diagonal`` mode).
 
 This yields AP, BWT, and forgetting without evaluating the full matrix.
+
+Generating model BK2 replays
+-----------------------------
+
+``scripts/generate_model_bk2.py`` produces one BK2 replay file per clip in a
+given BIDS run, using the checkpoint saved right after the model trained on
+that run (``task_idx == run_index``).  This enables direct run-level
+human/model comparison: every human BK2 in the run has a corresponding model
+BK2 starting from the same ``.state`` file.
+
+.. code-block:: bash
+
+   python scripts/generate_model_bk2.py \
+     --subject     sub-01 \
+     --agent       dqn \
+     --run_prefix  2026_05_04__13_15_00_seed0 \
+     --run_id      ses-001_run-02
+
+Output files are saved to
+``experiments/{subject}/{run_label}/{run_prefix}/model_bk2/{run_id}/``,
+named following the human BK2 convention with a ``_model-{run_label}``
+suffix:
+
+.. code-block:: text
+
+   sub-01_ses-001_task-mario_level-w1l1_scene-0_clip-XXXXXXXX_model-dqn.bk2
+
+Pass ``--output /path/to/dir`` to override the default output location.

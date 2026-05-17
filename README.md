@@ -103,6 +103,22 @@ mariha-evaluate \
 
 Outputs `experiments/sub-01/sac_ewc/<run_prefix>/eval_results.json`.
 
+### Generate model BK2 replays (human/model comparison)
+
+For a given BIDS run, generate one BK2 replay per clip using the model checkpoint
+that corresponds to that run (i.e. the checkpoint saved right after the model trained
+on it). The resulting BK2s can be compared 1:1 against the human BK2s for that run.
+
+```bash
+python scripts/generate_model_bk2.py \
+  --subject sub-01 \
+  --agent dqn \
+  --run_prefix <timestamp_seed0> \
+  --run_id ses-001_run-02
+```
+
+Outputs one BK2 per clip to `experiments/sub-01/dqn/<run_prefix>/model_bk2/ses-001_run-02/`.
+
 ---
 
 ## Agents and CL methods
@@ -170,9 +186,10 @@ MariHA/
 │   ├── methods/       # CL methods composed on any agent
 │   └── eval/          # CL metrics, eval runner
 ├── scripts/
-│   ├── run_cl.py      # Full CL training (mariha-run-cl)
-│   ├── run_single.py  # Single-scene training (mariha-run-single)
-│   └── evaluate.py    # Evaluation (mariha-evaluate)
+│   ├── run_cl.py             # Full CL training (mariha-run-cl)
+│   ├── run_single.py         # Single-scene training (mariha-run-single)
+│   ├── evaluate.py           # Evaluation (mariha-evaluate)
+│   └── generate_model_bk2.py # Generate model BK2 replays for human/model comparison
 ├── data/
 │   ├── mario/         # Game integration + stimuli (bundled)
 │   └── mario.scenes/  # Human gameplay data (git-annex)
