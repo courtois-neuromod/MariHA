@@ -32,4 +32,8 @@ if [[ -n "$CL_METHOD" ]]; then
     ARGS+=(--cl_method "$CL_METHOD")
 fi
 
+if [[ -n "${OUTPUT_ROOT:-}" ]]; then
+    ARGS+=(--output_root "$OUTPUT_ROOT")
+fi
+
 python "$REPO/scripts/generate_model_bk2.py" "${ARGS[@]}"

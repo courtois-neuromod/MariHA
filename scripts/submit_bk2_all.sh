@@ -10,6 +10,7 @@
 #   --subject      <sub-01>             (default: sub-01)
 #   --run_prefix   <prefix>             only this prefix (default: all found)
 #   --experiment_dir <path>             (default: $SCRATCH/MariHA/experiments)
+#   --output_root  <path>               output root for BK2 files (default: same as experiment_dir)
 #   --dry-run                           print job list, do not submit
 
 set -euo pipefail
@@ -22,6 +23,7 @@ SUBJECT="sub-01"
 FILTER_PREFIX=""
 DRY_RUN=false
 EXPERIMENT_DIR="${MARIHA_EXPERIMENT_DIR:-${SCRATCH:-$HOME}/MariHA/experiments}"
+OUTPUT_ROOT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
         --subject)       SUBJECT="$2";          shift 2 ;;
         --run_prefix)    FILTER_PREFIX="$2";    shift 2 ;;
         --experiment_dir) EXPERIMENT_DIR="$2";  shift 2 ;;
+        --output_root)   OUTPUT_ROOT="$2";      shift 2 ;;
         --dry-run)       DRY_RUN=true;          shift   ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -123,7 +126,7 @@ for rl_dir in "$CHECKPOINT_ROOT/${AGENT}" "$CHECKPOINT_ROOT/${AGENT}_"*/; do
         sbatch \
             --job-name="$JOB_NAME" \
             --array="1-${N_RUN_IDS}" \
-            --export="ALL,JOB_LIST=$JOB_LIST,REPO=$REPO,EXPERIMENT_DIR=$EXPERIMENT_DIR,SUBJECT=$SUBJECT,RUN_LABEL=$run_label,AGENT=$AGENT,CL_METHOD=$cl_method,RUN_PREFIX=$prefix" \
+            --export="ALL,JOB_LIST=$JOB_LIST,REPO=$REPO,EXPERIMENT_DIR=$EXPERIMENT_DIR,OUTPUT_ROOT=$OUTPUT_ROOT,SUBJECT=$SUBJECT,RUN_LABEL=$run_label,AGENT=$AGENT,CL_METHOD=$cl_method,RUN_PREFIX=$prefix" \
             "$REPO/scripts/bk2_worker.sbatch"
 
         echo "Submitted array 1-${N_RUN_IDS} for $run_label | $prefix"

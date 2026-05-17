@@ -65,10 +65,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root experiments directory (default: experiments).",
     )
     p.add_argument(
+        "--output_root",
+        default=None,
+        help=(
+            "Root directory for BK2 output. If set, overrides experiment_dir for output only; "
+            "checkpoints are still read from experiment_dir. "
+            "Output will be: {output_root}/{subject}/{run_label}/{run_prefix}/model_bk2/{run_id}/"
+        ),
+    )
+    p.add_argument(
         "--output",
         default=None,
         help=(
-            "Output directory for BK2 files. "
+            "Exact output directory for BK2 files (overrides --output_root). "
             "Default: {experiment_dir}/{subject}/{run_label}/{run_prefix}/model_bk2/{run_id}/"
         ),
     )
@@ -156,14 +165,8 @@ def main() -> None:
     if args.output:
         out_dir = Path(args.output)
     else:
-        out_dir = (
-            experiment_dir
-            / args.subject
-            / run_label
-            / args.run_prefix
-            / "model_bk2"
-            / args.run_id
-        )
+        out_root = Path(args.output_root) if args.output_root else experiment_dir
+        out_dir = out_root / args.subject / run_label / args.run_prefix / "model_bk2" / args.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Output: %s", out_dir)
 
