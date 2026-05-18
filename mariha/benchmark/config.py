@@ -59,7 +59,15 @@ def _add_common_flags(p: argparse.ArgumentParser) -> None:
         "--experiment_dir",
         type=str,
         default="experiments",
-        help="Root directory for checkpoints and logs.",
+        help="Root directory for logs (TSV, tensorboard, etc.).",
+    )
+    p.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Root directory for model checkpoints. "
+             "Defaults to --experiment_dir if not set. "
+             "Use this to write checkpoints to scratch while keeping logs in home.",
     )
     p.add_argument(
         "--render_mode",

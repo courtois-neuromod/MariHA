@@ -77,6 +77,7 @@ class PPO(BaseAgent):
         save_freq_epochs: int = 25,
         render_every: int = 0,
         experiment_dir: Optional[Path] = None,
+        checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
         super().__init__(
@@ -89,6 +90,7 @@ class PPO(BaseAgent):
             save_freq_epochs=save_freq_epochs,
             render_every=render_every,
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )
 
@@ -609,6 +611,8 @@ class PPO(BaseAgent):
         from mariha.utils.running import get_readable_timestamp
 
         experiment_dir = Path(getattr(args, "experiment_dir", "experiments"))
+        _ckpt = getattr(args, "checkpoint_dir", None)
+        checkpoint_dir = Path(_ckpt) if _ckpt else None
         # Prefer the seeded timestamp the benchmark context already composed
         # so the checkpoint dir leaf shares its prefix with the run dir leaf.
         timestamp = getattr(args, "run_timestamp", None) or (
@@ -640,5 +644,6 @@ class PPO(BaseAgent):
             ),
             hide_task_id=getattr(args, "hide_task_id", False),
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )

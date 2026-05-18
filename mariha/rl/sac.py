@@ -143,6 +143,7 @@ class SAC(BaseAgent):
         flush_on: str = "session",
         cl_hook_min_transitions: int = 500,
         experiment_dir: Optional[Path] = None,
+        checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
         super().__init__(
@@ -155,6 +156,7 @@ class SAC(BaseAgent):
             save_freq_epochs=save_freq_epochs,
             render_every=render_every,
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )
 
@@ -1082,6 +1084,8 @@ class SAC(BaseAgent):
         )
 
         experiment_dir = Path(getattr(args, "experiment_dir", "experiments"))
+        _ckpt = getattr(args, "checkpoint_dir", None)
+        checkpoint_dir = Path(_ckpt) if _ckpt else None
         # Prefer the timestamp the benchmark context already composed (so the
         # checkpoint dir leaf shares its prefix with the run dir leaf and
         # ``mariha-evaluate --run_prefix`` can find both).  Fall back to a
@@ -1138,6 +1142,7 @@ class SAC(BaseAgent):
                 args, "cl_hook_min_transitions", 500
             ),
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )
 

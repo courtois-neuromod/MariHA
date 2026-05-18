@@ -84,6 +84,7 @@ class BaseAgent(BenchmarkAgent):
         save_freq_epochs: int = 25,
         render_every: int = 0,
         experiment_dir: Optional[Path] = None,
+        checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
         """Initialise shared agent state.
@@ -110,8 +111,11 @@ class BaseAgent(BenchmarkAgent):
             save_freq_epochs: Checkpoint cadence in logging epochs.
             render_every: If > 0, play a live greedy episode every N
                 training episodes.  0 = disabled.
-            experiment_dir: Root directory for checkpoints and log
-                output.  Defaults to ``./experiments``.
+            experiment_dir: Root directory for logs and default fallback
+                for checkpoints.  Defaults to ``./experiments``.
+            checkpoint_dir: Root directory for model checkpoints.
+                Defaults to ``experiment_dir`` when not set.  Pass a
+                scratch path to keep large checkpoint files off home.
             timestamp: Run timestamp string — used to disambiguate
                 checkpoint directories for concurrent runs.
         """
@@ -126,6 +130,7 @@ class BaseAgent(BenchmarkAgent):
         self.save_freq_epochs = int(save_freq_epochs)
         self.render_every = int(render_every)
         self.experiment_dir = Path(experiment_dir or "experiments")
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else self.experiment_dir
         self.timestamp = timestamp or ""
 
         self.obs_shape = env.observation_space.shape
@@ -484,7 +489,7 @@ class BaseAgent(BenchmarkAgent):
         reconstruct it without reaching into the runner's internals.
         """
         return standard_checkpoint_dir(
-            self.experiment_dir,
+            self.checkpoint_dir,
             self.agent_name,
             self.timestamp,
             task_idx,

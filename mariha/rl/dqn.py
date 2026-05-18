@@ -82,6 +82,7 @@ class DQN(BaseAgent):
         render_every: int = 0,
         post_burn_in_update_after: int = 0,
         experiment_dir: Optional[Path] = None,
+        checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
     ) -> None:
         super().__init__(
@@ -94,6 +95,7 @@ class DQN(BaseAgent):
             save_freq_epochs=save_freq_epochs,
             render_every=render_every,
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )
 
@@ -679,6 +681,8 @@ class DQN(BaseAgent):
         from mariha.utils.running import get_readable_timestamp
 
         experiment_dir = Path(getattr(args, "experiment_dir", "experiments"))
+        _ckpt = getattr(args, "checkpoint_dir", None)
+        checkpoint_dir = Path(_ckpt) if _ckpt else None
         # Prefer the seeded timestamp the benchmark context already composed
         # so the checkpoint dir leaf shares its prefix with the run dir leaf.
         timestamp = getattr(args, "run_timestamp", None) or (
@@ -723,5 +727,6 @@ class DQN(BaseAgent):
                 args, "post_burn_in_update_after", 0
             ),
             experiment_dir=experiment_dir,
+            checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
         )
