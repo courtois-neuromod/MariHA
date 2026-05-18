@@ -295,7 +295,7 @@ echo -e "${GREEN}  MariHA setup complete.${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 if [[ "$CUSTOM_DATA_ROOT" == true ]]; then
-  echo "  Data path (add to ~/.bashrc for training scripts):"
+  echo "  Data path — export this in your shell before running training:"
   echo "    export MARIHA_DATA_ROOT=$DATA_ROOT"
   echo ""
 fi
