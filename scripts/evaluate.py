@@ -132,7 +132,8 @@ def main() -> None:
     agent_name = args.agent
     cl_name = args.cl_method
     run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
-    checkpoint_base = experiment_dir / "checkpoints" / run_label
+    # Checkpoints are namespaced by subject (see standard_checkpoint_dir).
+    checkpoint_base = experiment_dir / "checkpoints" / run_label / args.subject
 
     task_checkpoints = find_task_checkpoints(checkpoint_base, args.run_prefix)
     if not task_checkpoints:

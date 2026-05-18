@@ -3,22 +3,42 @@
 
 For a given human run (``run_id``) and a trained model (``run_prefix``), this
 script loads the checkpoint saved right after the model trained on that run
-(``task_idx == run_index``) and generates one BK2 replay file per episode
-spec (clip) in that run.  The result is a 1:1 model BK2 for every human BK2,
-enabling run-level human/model comparison.
+(``task_idx == run_index``) and plays one greedy episode per clip in that run.
+
+Design notes
+------------
+* **Greedy policy.** Actions are sampled with ``deterministic=True``.
+* **Checkpoint matched to the clip.** The checkpoint used is the one saved
+  immediately after the model finished training on the clip's own
+  sub/ses/run — so model and human are directly comparable on that run.
+* **No human frame budget.** The episode is *not* truncated at the human's
+  clip length; the model plays until it naturally clears the scene or dies.
+  ``--max_episode_steps`` is only a large safety cap against infinite loops.
+* **Hyperparameters from the run's config.json.** The agent is rebuilt from
+  the training run's ``config.json`` so the network matches the checkpoint
+  exactly; CLI agent flags are only a fallback when that file is missing.
+
+Output is a minimal-BIDS dataset, one per agent/CL-method combo::
+
+    {MARIHA_DATA_ROOT}/mario.scenes.{agent}-{cl_method|vanilla}/
+        sub-XX/ses-XXX/func/sub-XX_ses-XXX_task-mario_run-NN_..._clip-CCCC.bk2
 
 Usage::
 
     python scripts/generate_model_bk2.py \\
-        --subject sub-01 --agent dqn \\
+        --subject sub-01 --agent dqn --cl_method packnet \\
         --run_prefix 2026_05_04__13_15_00_seed0 \\
-        --run_id ses-001_run-02
+        --run_id ses-001_run-02 \\
+        --experiment_dir $SCRATCH/MariHA/experiments
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import logging
+import os
 import shutil
 import sys
 import tempfile
@@ -36,6 +56,10 @@ from mariha.utils.logging import EpochLogger
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+#: Safety cap on a model episode's length. Far longer than any human clip —
+#: it only exists so a stuck policy cannot record forever.
+DEFAULT_MAX_EPISODE_STEPS = 50_000
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,18 +85,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--experiment_dir",
-        default="experiments",
-        help="Root experiments directory (default: experiments).",
+        default=os.environ.get("MARIHA_EXPERIMENT_DIR", "experiments"),
+        help="Root experiments directory (default: $MARIHA_EXPERIMENT_DIR or 'experiments').",
     )
     p.add_argument(
-        "--output",
+        "--bids_root",
         default=None,
         help=(
-            "Output directory for BK2 files. "
-            "Default: {experiment_dir}/{subject}/{run_label}/{run_prefix}/model_bk2/{run_id}/"
+            "Output BIDS dataset root. Default: "
+            "{MARIHA_DATA_ROOT}/mario.scenes.{agent}-{cl_method|vanilla}/"
         ),
     )
-    # Agent constructor flags — same set as evaluate.py
+    p.add_argument(
+        "--max_episode_steps",
+        type=int,
+        default=DEFAULT_MAX_EPISODE_STEPS,
+        help="Safety cap on model episode length (not a human-matched budget).",
+    )
+    # Agent constructor flags — fallback only, used when config.json is absent.
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--hidden_sizes", nargs="*", type=int, default=[])
     p.add_argument("--activation", default="tanh")
@@ -82,28 +112,58 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _build_agent(agent_name: str, checkpoint_dir: Path, env, run_ids: list, args):
+def _load_train_config(
+    experiment_dir: Path, subject: str, run_label: str, run_prefix: str,
+    fallback: argparse.Namespace,
+) -> argparse.Namespace:
+    """Return the training run's args, read from its ``config.json``.
+
+    Falls back to the CLI ``fallback`` namespace (with a warning) when the
+    config file cannot be found — e.g. for ad-hoc runs.
+    """
+    config_path = (
+        experiment_dir / subject / run_label / run_prefix / "config.json"
+    )
+    if not config_path.exists():
+        logger.warning(
+            "config.json not found at %s — rebuilding the agent from CLI "
+            "flags instead. The network may not match the checkpoint.",
+            config_path,
+        )
+        return fallback
+    with open(config_path) as f:
+        cfg = json.load(f)
+    logger.info("Loaded training config: %s", config_path)
+    return argparse.Namespace(**cfg)
+
+
+def _build_agent(agent_name: str, checkpoint_dir: Path, env, run_ids: list,
+                  train_args: argparse.Namespace):
     agent_cls = get_agent_class(agent_name)
     eval_logger = EpochLogger(
         output_dir="/tmp/mariha_bk2_tmp",
         logger_output=["stdout"],
     )
-    agent = agent_cls.from_args(args, env=env, logger=eval_logger, run_ids=run_ids)
+    agent = agent_cls.from_args(train_args, env=env, logger=eval_logger, run_ids=run_ids)
     agent.load_checkpoint(checkpoint_dir)
     return agent
 
 
-def _model_bk2_filename(spec, run_label: str) -> str:
-    sub = spec.subject.replace("sub-", "")
-    ses = spec.session.replace("ses-", "")
+def _bids_bk2_path(bids_root: Path, spec) -> Path:
+    """Return the minimal-BIDS path for a clip's model BK2.
+
+    Layout: ``{bids_root}/{sub}/{ses}/func/{sub}_{ses}_task-mario_run-NN
+    _level-L_scene-S_clip-CCCC.bk2``.
+    """
+    sub = spec.subject               # 'sub-01'
+    ses = spec.session               # 'ses-002'
+    run = spec.run_id.split("run-")[-1]
     scene_num = int(spec.scene_id.split("s")[-1])
-    return (
-        f"sub-{sub}_ses-{ses}_task-mario"
-        f"_level-{spec.level}"
-        f"_scene-{scene_num}"
-        f"_clip-{spec.clip_code}"
-        f"_model-{run_label}.bk2"
+    fname = (
+        f"{sub}_{ses}_task-mario_run-{run}"
+        f"_level-{spec.level}_scene-{scene_num}_clip-{spec.clip_code}.bk2"
     )
+    return bids_root / sub / ses / "func" / fname
 
 
 def main() -> None:
@@ -114,7 +174,16 @@ def main() -> None:
     agent_name = args.agent
     cl_name = args.cl_method
     run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
-    checkpoint_base = experiment_dir / "checkpoints" / run_label
+
+    # Resolve the output BIDS dataset root: mario.scenes.{agent}-{cl|vanilla}.
+    combo = f"{agent_name}-{cl_name}" if cl_name else f"{agent_name}-vanilla"
+    if args.bids_root:
+        bids_root = Path(args.bids_root)
+    else:
+        data_root = os.environ.get("MARIHA_DATA_ROOT")
+        if not data_root:
+            parser.error("Pass --bids_root or set MARIHA_DATA_ROOT.")
+        bids_root = Path(data_root) / f"mario.scenes.{combo}"
 
     # ------------------------------------------------------------------ #
     # 1. Load curriculum → validate run_id, compute run_index              #
@@ -141,9 +210,15 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------ #
-    # 2. Locate checkpoint                                                  #
+    # 2. Locate checkpoint (subject-namespaced, matched to this run)       #
     # ------------------------------------------------------------------ #
-    checkpoint_dir = checkpoint_base / f"{args.run_prefix}_task{run_index}"
+    checkpoint_dir = (
+        experiment_dir
+        / "checkpoints"
+        / run_label
+        / args.subject
+        / f"{args.run_prefix}_task{run_index}"
+    )
     if not checkpoint_dir.exists():
         logger.error("Checkpoint directory not found: %s", checkpoint_dir)
         sys.exit(1)
@@ -151,27 +226,19 @@ def main() -> None:
     logger.info("Checkpoint: %s", checkpoint_dir)
 
     # ------------------------------------------------------------------ #
-    # 3. Determine output directory                                         #
+    # 3. Output directory (minimal-BIDS dataset for this combo)            #
     # ------------------------------------------------------------------ #
-    if args.output:
-        out_dir = Path(args.output)
-    else:
-        out_dir = (
-            experiment_dir
-            / args.subject
-            / run_label
-            / args.run_prefix
-            / "model_bk2"
-            / args.run_id
-        )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Output: %s", out_dir)
+    logger.info("Output dataset: %s", bids_root)
 
     # ------------------------------------------------------------------ #
-    # 4. Build dummy env → instantiate and load agent → close dummy env    #
+    # 4. Rebuild the agent from the training run's config, load checkpoint #
     # stable-retro allows only one emulator per process; the dummy env     #
     # must be closed before the per-clip recording envs are opened.        #
     # ------------------------------------------------------------------ #
+    train_args = _load_train_config(
+        experiment_dir, args.subject, run_label, args.run_prefix, fallback=args,
+    )
+
     scene_meta = load_metadata(SCENARIOS_DIR)
     first_spec = run_specs[0]
     first_exit = scene_meta[first_spec.scene_id]["exit_point"]
@@ -183,22 +250,22 @@ def main() -> None:
         run_ids=run_ids,
     )
     try:
-        agent = _build_agent(agent_name, checkpoint_dir, dummy_env, run_ids, args)
+        agent = _build_agent(agent_name, checkpoint_dir, dummy_env, run_ids, train_args)
     finally:
         dummy_env.close()
 
     # ------------------------------------------------------------------ #
-    # 5. Generate one BK2 per clip                                         #
+    # 5. Generate one BK2 per clip — greedy policy, no human frame budget  #
     # ------------------------------------------------------------------ #
     n_generated = 0
     for i, spec in enumerate(run_specs):
-        bk2_name = _model_bk2_filename(spec, run_label)
-        final_path = out_dir / bk2_name
+        final_path = _bids_bk2_path(bids_root, spec)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
 
         if final_path.exists():
             logger.info(
                 "[%d/%d] Already exists, skipping: %s",
-                i + 1, len(run_specs), bk2_name,
+                i + 1, len(run_specs), final_path.name,
             )
             n_generated += 1
             continue
@@ -207,6 +274,10 @@ def main() -> None:
             "[%d/%d] clip=%s scene=%s",
             i + 1, len(run_specs), spec.clip_code, spec.scene_id,
         )
+
+        # Lift the human-derived frame budget: the model plays to natural
+        # termination (scene cleared or death), capped only for safety.
+        play_spec = dataclasses.replace(spec, max_steps=args.max_episode_steps)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -220,7 +291,7 @@ def main() -> None:
                 record_dir=tmpdir_path,
             )
             try:
-                obs, info = env.reset(episode_spec=spec)
+                obs, info = env.reset(episode_spec=play_spec)
                 one_hot = info["task_one_hot"]
                 done = False
                 while not done:
@@ -241,10 +312,10 @@ def main() -> None:
                 )
 
             shutil.move(str(bk2_files[0]), str(final_path))
-            logger.info("  -> %s", bk2_name)
+            logger.info("  -> %s", final_path.name)
             n_generated += 1
 
-    print(f"\nDone. {n_generated}/{len(run_specs)} BK2 files generated in:\n  {out_dir}")
+    print(f"\nDone. {n_generated}/{len(run_specs)} BK2 files generated in:\n  {bids_root}")
 
 
 if __name__ == "__main__":

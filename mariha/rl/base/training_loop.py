@@ -376,6 +376,7 @@ class TrainingLoopRunner:
             self.agent.agent_name,
             self.agent.timestamp,
             self._current_task_idx,
+            subject=getattr(self.agent, "subject", ""),
         )
         directory.mkdir(parents=True, exist_ok=True)
         self.logger.log(

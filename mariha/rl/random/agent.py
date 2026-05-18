@@ -172,9 +172,10 @@ class RandomAgent(BenchmarkAgent):
     def _checkpoint_dir(self, task_idx: int) -> Path:
         agent_name = "random"
         ts = self.timestamp or ""
-        return (
-            self.experiment_dir
-            / "checkpoints"
-            / agent_name
-            / f"{ts}_task{task_idx}"
-        )
+        base = self.experiment_dir / "checkpoints" / agent_name
+        # Subject is set post-construction by run_cl.py; namespace by it when
+        # present (matches standard_checkpoint_dir's layout).
+        subject = getattr(self, "subject", "")
+        if subject:
+            base = base / subject
+        return base / f"{ts}_task{task_idx}"

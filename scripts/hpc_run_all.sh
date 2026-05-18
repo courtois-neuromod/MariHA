@@ -63,9 +63,26 @@ export TF_FORCE_GPU_ALLOW_GROWTH=true
 
 echo "Task $IDX: agent=$AGENT subject=$SUBJECT cl_method=$CL_METHOD"
 
-if [ "$CL_METHOD" = "none" ]; then
-    mariha-run-cl --agent "$AGENT" --subject "$SUBJECT" --seed 0 --progress off
-else
-    mariha-run-cl --agent "$AGENT" --cl_method "$CL_METHOD" \
-        --subject "$SUBJECT" --seed 0 --progress off
+CL_ARG=()
+[ "$CL_METHOD" != "none" ] && CL_ARG=(--cl_method "$CL_METHOD")
+
+mariha-run-cl --agent "$AGENT" "${CL_ARG[@]}" \
+    --subject "$SUBJECT" --seed 0 --progress off \
+    --experiment_dir "$MARIHA_EXPERIMENT_DIR"
+TRAIN_RC=$?
+
+if [ "$TRAIN_RC" -ne 0 ]; then
+    echo "ERROR: training failed (rc=$TRAIN_RC) — not chaining BK2 generation." >&2
+    exit "$TRAIN_RC"
 fi
+
+# Training succeeded — chain BK2 replay generation for this combo. The
+# submitter discovers the run_prefix from the checkpoints just written.
+# A submission failure must not mark this (successful) training task failed.
+echo "Training done — submitting BK2 generation for this combo ..."
+if ! bash "$MARIHA_REPO/scripts/submit_bk2_combo.sh" \
+        --agent "$AGENT" --subject "$SUBJECT" "${CL_ARG[@]}"; then
+    echo "WARNING: BK2 chaining failed — submit it later with:" >&2
+    echo "  scripts/submit_bk2_combo.sh --agent $AGENT --subject $SUBJECT ${CL_ARG[*]}" >&2
+fi
+exit 0

@@ -128,6 +128,12 @@ class BaseAgent(BenchmarkAgent):
         self.experiment_dir = Path(experiment_dir or "experiments")
         self.timestamp = timestamp or ""
 
+        #: Subject ID for this run.  Not a constructor argument — the runner
+        #: script (``run_cl.py``) sets it after construction, mirroring how
+        #: it tags ``agent_name`` with the CL method.  Used to namespace
+        #: checkpoint directories by subject.  Empty string => legacy layout.
+        self.subject: str = ""
+
         self.obs_shape = env.observation_space.shape
         self.act_dim = env.action_space.n
 
@@ -488,4 +494,5 @@ class BaseAgent(BenchmarkAgent):
             self.agent_name,
             self.timestamp,
             task_idx,
+            subject=self.subject,
         )

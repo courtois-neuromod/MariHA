@@ -59,7 +59,9 @@ else
 fi
 
 export MARIHA_REPO="$REPO_ROOT"
-export MARIHA_EXPERIMENT_DIR="$REPO_ROOT/experiments"
+# Experiment outputs (checkpoints + run dirs) live on $SCRATCH, not in the
+# repo — they are large and regenerable. Only SLURM .out/.err stay in the repo.
+export MARIHA_EXPERIMENT_DIR="${MARIHA_EXPERIMENT_DIR:-$SCRATCH/MariHA/experiments}"
 info "MARIHA_REPO = $MARIHA_REPO"
 info "MARIHA_EXPERIMENT_DIR = $MARIHA_EXPERIMENT_DIR"
 

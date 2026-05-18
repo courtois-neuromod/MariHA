@@ -92,6 +92,10 @@ def main() -> None:
     # ------------------------------------------------------------------
     agent = agent_cls.from_args(args, env=env, logger=logger, run_ids=run_ids)
 
+    # Namespace checkpoints by subject (see BaseAgent.subject). Set here —
+    # post-construction — mirroring the agent_name tagging below.
+    agent.subject = args.subject
+
     if cl_cls is not None:
         agent.cl_method = cl_cls.from_args(args, agent)
         # Tag the agent name so checkpoint dirs are namespaced by CL method,
