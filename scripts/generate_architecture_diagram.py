@@ -1,14 +1,21 @@
-"""Generate a PlotNeuralNet-style PNG architecture diagram for a MariHA model.
+"""Generate a PlotNeuralNet-style PNG architecture *panel* for a MariHA model.
 
 Follows ``courtois-neuromod/mario.tutorials``'s ``generate_architecture_diagram.py``:
-the network is described with PlotNeuralNet's ``tikzeng`` primitives, emitted as
-a LaTeX/TikZ file, compiled with ``pdflatex``, and rasterised to PNG.
+the network is described with PlotNeuralNet's ``tikzeng`` primitives, emitted
+as a LaTeX/TikZ file, compiled with ``pdflatex``, and rasterised to PNG.
 
-    tikzeng  ->  .tex  --(pdflatex)-->  .pdf  --(pdftoppm)-->  .png
+    architecture spec  ->  tikzeng  ->  .tex  --(pdflatex)-->  .pdf  --(PyMuPDF)-->  .png
 
-The diagrams reflect the networks in ``mariha/rl/models.py``: the shared
-``BaseCNN`` backbone (4 stride-2 conv blocks -> Flatten -> Dense 512), the
-task one-hot concatenated to the 512-d features, then per-agent heads.
+Unlike a single-network diagram, each agent is drawn as a *panel*: one stacked
+PlotNeuralNet diagram per network the agent instantiates. Where one network is
+a Polyak copy of another (a target network), a text note in the gap between
+the stacks records that — the target update is a whole-network weight copy,
+not a layer-to-layer connection, so it is deliberately not drawn as an arrow.
+This matters because, e.g., SAC builds five independent networks (actor + twin
+critics + twin target critics), not one.
+
+The topology comes from ``scripts/architecture_specs.py`` — a hand-maintained
+registry kept honest by ``scripts/tests/test_architecture_specs.py``.
 
 Usage::
 
@@ -41,7 +48,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
+
+try:  # installed package / `python -m`
+    from scripts.architecture_specs import AgentArch, Link, Network, get_spec
+except ImportError:  # run directly: python scripts/generate_architecture_diagram.py
+    from architecture_specs import AgentArch, Link, Network, get_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = REPO_ROOT / "assets" / "model_architectures"
@@ -49,6 +61,15 @@ PLOTNN_URL = "https://github.com/HarisIqbal88/PlotNeuralNet.git"
 
 # ``ddqn`` shares DQN's network; ``random`` has no network and is omitted.
 SUPPORTED_MODELS = ("sac", "ppo", "dqn", "ddqn")
+
+# --- Layout constants (PlotNeuralNet units) --------------------------------
+# Vertical spacing between stacked network diagrams. Tuned so stacks sit
+# close without overlapping; override per-run with --row-gap.
+ROW_GAP_DEFAULT = 12.0
+# Backbone box geometry: (zlabel spatial size, box height==depth). The input's
+# height is the tallest box and drives the minimum safe ROW_GAP.
+_INPUT_H = 28
+_CONV_GEOM = [(42, 24), (21, 20), (11, 14), (6, 9)]  # conv1..conv4
 
 
 # ---------------------------------------------------------------------------
@@ -81,99 +102,153 @@ def ensure_plotneuralnet(explicit: Path | None) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Architecture definitions (PlotNeuralNet tikzeng calls)
+# TikZ helpers
 # ---------------------------------------------------------------------------
-#
-# tikzeng is imported lazily inside build_arch() once sys.path is set, so the
-# helpers below receive the primitives they need as explicit arguments.
 
 
-def _backbone(tz) -> List[str]:
-    """Shared BaseCNN backbone + task one-hot concat, as tikzeng layers.
+def _node(net_id: str, suffix: str) -> str:
+    """Return a globally-unique, TikZ-safe node name for ``net_id``'s box.
 
-    4 stride-2 conv blocks (84 -> 42 -> 21 -> 11 -> 6, 32 filters each),
-    Flatten (1152), Dense projection (512), then Concatenate with the task
-    one-hot. The branch point for every agent head is the ``concat`` node.
+    Underscores and other punctuation are stripped because they are unsafe in
+    TikZ node names; the network id only needs to stay *unique*, not readable.
     """
-    return [
-        tz.to_Conv("input", 84, 4, offset="(0,0,0)", to="(0,0,0)",
-                   height=30, depth=30, width=1, caption="Input 84x84x4"),
+    safe = "".join(ch for ch in net_id if ch.isalnum())
+    return f"{safe}{suffix}"
 
-        tz.to_Conv("conv1", 42, 32, offset="(2.7,0,0)", to="(input-east)",
-                   height=24, depth=24, width=3, caption="Conv 3x3 s2"),
-        tz.to_connection("input", "conv1"),
-        tz.to_Conv("conv2", 21, 32, offset="(2.7,0,0)", to="(conv1-east)",
-                   height=18, depth=18, width=3, caption="Conv 3x3 s2"),
-        tz.to_connection("conv1", "conv2"),
-        tz.to_Conv("conv3", 11, 32, offset="(2.7,0,0)", to="(conv2-east)",
-                   height=12, depth=12, width=3, caption="Conv 3x3 s2"),
-        tz.to_connection("conv2", "conv3"),
-        tz.to_Conv("conv4", 6, 32, offset="(2.7,0,0)", to="(conv3-east)",
-                   height=8, depth=8, width=3, caption="Conv 3x3 s2"),
-        tz.to_connection("conv3", "conv4"),
 
-        tz.to_SoftMax("flatten", 1152, offset="(2.7,0,0)", to="(conv4-east)",
-                      width=1.5, height=6, depth=6, opacity=0.6, caption="Flatten"),
-        tz.to_connection("conv4", "flatten"),
-        tz.to_SoftMax("dense", 512, offset="(2.7,0,0)", to="(flatten-east)",
-                      width=2, height=10, depth=10, opacity=0.7, caption="Dense ReLU"),
-        tz.to_connection("flatten", "dense"),
+def _tex(text: str) -> str:
+    """Escape LaTeX-special characters in display text."""
+    repl = {"&": r"\&", "%": r"\%", "#": r"\#", "_": r"\_"}
+    return "".join(repl.get(ch, ch) for ch in text)
 
-        # Task one-hot input, sitting below the dense projection.
-        tz.to_SoftMax("task", "", offset="(2.7,-7,0)", to="(flatten-east)",
-                      width=1.5, height=5, depth=5, opacity=0.7, caption="Task one-hot"),
-        tz.to_SoftMax("concat", "", offset="(3,0,0)", to="(dense-east)",
-                      width=2.2, height=11, depth=11, opacity=0.7,
-                      caption="Concat 512+task"),
-        tz.to_connection("dense", "concat"),
-        tz.to_connection("task", "concat"),
+
+def _cap(text: str) -> str:
+    """Brace-wrap a caption so multi-word values survive pgfkeys parsing."""
+    return "{" + _tex(text) + "}"
+
+
+# ---------------------------------------------------------------------------
+# Per-network and per-link rendering
+# ---------------------------------------------------------------------------
+
+
+def _network_layers(tz, net: Network, row: int, row_gap: float) -> List[str]:
+    """Return the tikzeng layer list for one network stacked at ``row``.
+
+    The shared ``BaseCNN`` backbone (input -> 4 conv blocks -> Flatten ->
+    Dense 512 -> Concatenate task one-hot) is drawn for *every* network — the
+    networks genuinely do not share weights — followed by the network's head(s).
+    """
+    nid = lambda s: _node(net.id, s)  # noqa: E731 — terse local alias
+    origin = f"(0,{-row * row_gap:.2f},0)"  # absolute origin for this stack
+
+    layers = [
+        tz.to_Conv(nid("input"), 84, 4, offset="(0,0,0)", to=origin,
+                   height=_INPUT_H, depth=_INPUT_H, width=1,
+                   caption=_cap("Input 84x84x4")),
+    ]
+    prev = "input"
+    for i, (s_filer, hw) in enumerate(_CONV_GEOM, start=1):
+        layers.append(
+            tz.to_Conv(nid(f"conv{i}"), s_filer, 32, offset="(2.7,0,0)",
+                       to=f"({nid(prev)}-east)", height=hw, depth=hw, width=3,
+                       caption=_cap("Conv 3x3 s2")))
+        layers.append(tz.to_connection(nid(prev), nid(f"conv{i}")))
+        prev = f"conv{i}"
+
+    layers += [
+        tz.to_SoftMax(nid("flatten"), 1152, offset="(2.7,0,0)",
+                      to=f"({nid('conv4')}-east)", width=1.5, height=6, depth=6,
+                      opacity=0.6, caption=_cap("Flatten")),
+        tz.to_connection(nid("conv4"), nid("flatten")),
+        tz.to_SoftMax(nid("dense"), 512, offset="(2.7,0,0)",
+                      to=f"({nid('flatten')}-east)", width=2, height=10, depth=10,
+                      opacity=0.7, caption=_cap("Dense ReLU")),
+        tz.to_connection(nid("flatten"), nid("dense")),
+        # Task one-hot sits just above the dense projection and feeds the
+        # concat. Kept small and low so it reads as part of the network.
+        tz.to_SoftMax(nid("task"), "", offset="(2.7,4,0)",
+                      to=f"({nid('flatten')}-east)", width=1.5, height=3, depth=3,
+                      opacity=0.7, caption=_cap("Task one-hot")),
+        tz.to_SoftMax(nid("concat"), "", offset="(3,0,0)",
+                      to=f"({nid('dense')}-east)", width=2.2, height=11, depth=11,
+                      opacity=0.7, caption=_cap("Concat 512+task")),
+        tz.to_connection(nid("dense"), nid("concat")),
+        tz.to_connection(nid("task"), nid("concat")),
     ]
 
+    # Output heads branch off the concat node: one head straight, two heads
+    # fan out up/down (PPO's actor + critic).
+    offsets = ["(3.4,0,0)"] if len(net.heads) == 1 else ["(3.6,3,0)", "(3.6,-3,0)"]
+    for head, offset in zip(net.heads, offsets):
+        layers.append(
+            tz.to_SoftMax(nid(head.id), head.units, offset=offset,
+                          to=f"({nid('concat')}-east)", width=1.5, height=5,
+                          depth=5, opacity=0.9, caption=_cap(head.label)))
+        layers.append(tz.to_connection(nid("concat"), nid(head.id)))
 
-def _heads(tz, model: str, n_actions: int) -> List[str]:
-    """Per-agent output heads branching from the ``concat`` node."""
-    if model == "ppo":
-        return [
-            tz.to_SoftMax("actor", n_actions, offset="(3.2,3,0)", to="(concat-east)",
-                          width=1.5, height=5, depth=5, opacity=0.9,
-                          caption="Actor (logits)"),
-            tz.to_connection("concat", "actor"),
-            tz.to_SoftMax("critic", 1, offset="(3.2,-3,0)", to="(concat-east)",
-                          width=1.5, height=3, depth=3, opacity=0.9,
-                          caption="Critic (value)"),
-            tz.to_connection("concat", "critic"),
-        ]
-    if model == "sac":
-        return [
-            tz.to_SoftMax("actor", n_actions, offset="(3.2,3,0)", to="(concat-east)",
-                          width=1.5, height=5, depth=5, opacity=0.9,
-                          caption="Actor (logits)"),
-            tz.to_connection("concat", "actor"),
-            tz.to_SoftMax("critic", n_actions, offset="(3.2,-3,0)", to="(concat-east)",
-                          width=1.5, height=5, depth=5, opacity=0.9,
-                          caption="Critic (Q-values)"),
-            tz.to_connection("concat", "critic"),
-        ]
-    # dqn / ddqn: single Q-head.
-    return [
-        tz.to_SoftMax("qhead", n_actions, offset="(3.2,0,0)", to="(concat-east)",
-                      width=1.5, height=5, depth=5, opacity=0.9,
-                      caption="Q-values"),
-        tz.to_connection("concat", "qhead"),
-    ]
+    return layers
 
 
-def build_arch(tz, plotnn_dir: Path, model: str, n_actions: int) -> List[str]:
-    """Assemble the full tikzeng architecture list for ``model``."""
-    key = "dqn" if model == "ddqn" else model
-    return [
-        tz.to_head(str(plotnn_dir)),
-        tz.to_cor(),
-        tz.to_begin(),
-        *_backbone(tz),
-        *_heads(tz, key, n_actions),
-        tz.to_end(),
-    ]
+def _annotation_text(link: Link, by_id: Dict[str, Network]) -> str:
+    """Build the note describing a Polyak target-network relationship."""
+    src = _tex(by_id[link.src].title)
+    dst = _tex(by_id[link.dst].title)
+    # `\\\\` in this source emits a literal `\\` — a TikZ line break.
+    return (f"({dst} = periodic Polyak copy\\\\"
+            f"of {src}, all weights)")
+
+
+def _annotation_layer(link: Link, by_id: Dict[str, Network],
+                      rows: Dict[str, int], row_gap: float) -> str:
+    """Render a Link as an italic note centred in the gap between two stacks.
+
+    A target update copies the *entire* network's weights, so it is shown as
+    a note — not an arrow piercing a single layer box.
+    """
+    y = -(rows[link.src] + 0.5) * row_gap  # midpoint between the two stacks
+    text = _annotation_text(link, by_id)
+    return (
+        "\n\\node[anchor=west, align=left, text=black!70, "
+        "font=\\sffamily\\small\\itshape] "
+        f"at (0,{y:.2f},0) {{{text}}};\n"
+    )
+
+
+def _network_title(net: Network) -> str:
+    """Return a raw-TikZ label node placed to the left of a network stack."""
+    box = _node(net.id, "input")
+    return (
+        "\n\\node[anchor=east, font=\\sffamily\\bfseries\\large] at "
+        f"([xshift=-1.6cm]{box}-west) {_cap(net.title)};\n"
+    )
+
+
+def _panel_title(arch: AgentArch) -> str:
+    """Return a raw-TikZ title node placed above the first network stack."""
+    box = _node(arch.networks[0].id, "input")
+    return (
+        "\n\\node[anchor=south, font=\\sffamily\\bfseries\\LARGE] at "
+        f"([yshift=1.5cm]{box}-north) {_cap(arch.title)};\n"
+    )
+
+
+def build_arch(tz, plotnn_dir: Path, arch: AgentArch, row_gap: float) -> List[str]:
+    """Assemble the full tikzeng layer list for an agent's panel."""
+    rows = {net.id: i for i, net in enumerate(arch.networks)}
+    by_id = {net.id: net for net in arch.networks}
+
+    layers: List[str] = [tz.to_head(str(plotnn_dir)), tz.to_cor(), tz.to_begin()]
+    for row, net in enumerate(arch.networks):
+        layers += _network_layers(tz, net, row, row_gap)
+    # Titles and annotations reference box anchors / coordinates, so they
+    # come after all boxes are placed.
+    layers += [_network_title(net) for net in arch.networks]
+    layers += [_annotation_layer(link, by_id, rows, row_gap)
+               for link in arch.links]
+    layers.append(_panel_title(arch))
+    layers.append(tz.to_end())
+    return layers
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +282,11 @@ def _pdf_to_png(pdf: Path, png: Path, dpi: int = 300) -> None:
         doc[0].get_pixmap(dpi=dpi).save(png)
 
 
-def render(tz, plotnn_dir: Path, model: str, n_actions: int, out_dir: Path) -> Path:
-    """Build, compile, and rasterise ``model``'s diagram. Returns the PNG path."""
-    arch = build_arch(tz, plotnn_dir, model, n_actions)
+def render(tz, plotnn_dir: Path, model: str, n_actions: int,
+           out_dir: Path, row_gap: float) -> Path:
+    """Build, compile, and rasterise ``model``'s panel. Returns the PNG path."""
+    arch = get_spec(model, n_actions)
+    layers = build_arch(tz, plotnn_dir, arch, row_gap)
     out_dir.mkdir(parents=True, exist_ok=True)
     png_path = out_dir / f"{model}_architecture.png"
 
@@ -219,7 +296,7 @@ def render(tz, plotnn_dir: Path, model: str, n_actions: int, out_dir: Path) -> P
 
         # tikzeng's to_generate() prints every emitted line — silence it.
         with contextlib.redirect_stdout(io.StringIO()):
-            tz.to_generate(arch, str(tex_path))
+            tz.to_generate(layers, str(tex_path))
 
         proc = subprocess.run(
             ["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
@@ -228,9 +305,9 @@ def render(tz, plotnn_dir: Path, model: str, n_actions: int, out_dir: Path) -> P
         )
         pdf_path = tmp_dir / f"{model}_architecture.pdf"
         if proc.returncode != 0 or not pdf_path.is_file():
-            log = (tmp_dir / f"{model}_architecture.log")
-            tail = log.read_text(errors="replace").splitlines()[-25:] if log.is_file() \
-                else proc.stdout.splitlines()[-25:]
+            log = tmp_dir / f"{model}_architecture.log"
+            tail = (log.read_text(errors="replace").splitlines()[-25:]
+                    if log.is_file() else proc.stdout.splitlines()[-25:])
             sys.exit("ERROR: pdflatex failed:\n  " + "\n  ".join(tail))
 
         _pdf_to_png(pdf_path, png_path)
@@ -240,7 +317,7 @@ def render(tz, plotnn_dir: Path, model: str, n_actions: int, out_dir: Path) -> P
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a PlotNeuralNet-style PNG architecture diagram "
+        description="Generate a PlotNeuralNet-style PNG architecture panel "
                     "for a MariHA model.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -251,6 +328,10 @@ def main() -> None:
     parser.add_argument(
         "--n-actions", type=int, default=9,
         help="Size of the discrete action space (MariHA uses 9).",
+    )
+    parser.add_argument(
+        "--row-gap", type=float, default=ROW_GAP_DEFAULT,
+        help="Vertical spacing between stacked networks. Lower = more compact.",
     )
     parser.add_argument(
         "--out-dir", type=Path, default=DEFAULT_OUT_DIR,
@@ -272,7 +353,8 @@ def main() -> None:
         SUPPORTED_MODELS if args.model == "all" else (args.model,)
     )
     for model in models:
-        path = render(tz, plotnn_dir, model, args.n_actions, args.out_dir)
+        path = render(tz, plotnn_dir, model, args.n_actions,
+                       args.out_dir, args.row_gap)
         print(f"[diagram] wrote {path}")
 
 
