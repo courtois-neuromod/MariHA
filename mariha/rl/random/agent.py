@@ -35,7 +35,9 @@ class RandomAgent(BenchmarkAgent):
         run_ids: list[str],
         seed: int = 0,
         experiment_dir: Path = Path("experiments"),
+        checkpoint_dir: Path | None = None,
         timestamp: str = "",
+        subject: str = "",
     ) -> None:
         self.env = env
         self.logger = logger
@@ -43,7 +45,9 @@ class RandomAgent(BenchmarkAgent):
         self.n_actions = env.action_space.n
         self.rng = np.random.default_rng(seed)
         self.experiment_dir = experiment_dir
+        self.checkpoint_dir = checkpoint_dir if checkpoint_dir else experiment_dir
         self.timestamp = timestamp
+        self.subject = subject
 
     # ------------------------------------------------------------------
     # BenchmarkAgent interface
@@ -156,13 +160,16 @@ class RandomAgent(BenchmarkAgent):
         timestamp = getattr(args, "run_timestamp", None) or (
             f"{get_readable_timestamp()}_seed{getattr(args, 'seed', 0)}"
         )
+        _ckpt = getattr(args, "checkpoint_dir", None)
         return cls(
             env=env,
             logger=logger,
             run_ids=run_ids,
             seed=getattr(args, "seed", 0),
             experiment_dir=Path(getattr(args, "experiment_dir", "experiments")),
+            checkpoint_dir=Path(_ckpt) if _ckpt else None,
             timestamp=timestamp,
+            subject=getattr(args, "subject", ""),
         )
 
     # ------------------------------------------------------------------
@@ -170,11 +177,11 @@ class RandomAgent(BenchmarkAgent):
     # ------------------------------------------------------------------
 
     def _checkpoint_dir(self, task_idx: int) -> Path:
-        agent_name = "random"
-        ts = self.timestamp or ""
-        return (
-            self.experiment_dir
-            / "checkpoints"
-            / agent_name
-            / f"{ts}_task{task_idx}"
+        from mariha.rl.base.checkpoint import standard_checkpoint_dir
+        return standard_checkpoint_dir(
+            self.checkpoint_dir,
+            "random",
+            self.timestamp,
+            task_idx,
+            subject=self.subject,
         )

@@ -86,6 +86,7 @@ class BaseAgent(BenchmarkAgent):
         experiment_dir: Optional[Path] = None,
         checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
+        subject: str = "",
     ) -> None:
         """Initialise shared agent state.
 
@@ -132,6 +133,7 @@ class BaseAgent(BenchmarkAgent):
         self.experiment_dir = Path(experiment_dir or "experiments")
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else self.experiment_dir
         self.timestamp = timestamp or ""
+        self.subject = subject or ""
 
         self.obs_shape = env.observation_space.shape
         self.act_dim = env.action_space.n
@@ -493,4 +495,5 @@ class BaseAgent(BenchmarkAgent):
             self.agent_name,
             self.timestamp,
             task_idx,
+            subject=self.subject,
         )

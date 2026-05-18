@@ -145,6 +145,7 @@ class SAC(BaseAgent):
         experiment_dir: Optional[Path] = None,
         checkpoint_dir: Optional[Path] = None,
         timestamp: Optional[str] = None,
+        subject: str = "",
     ) -> None:
         super().__init__(
             env=env,
@@ -158,6 +159,7 @@ class SAC(BaseAgent):
             experiment_dir=experiment_dir,
             checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
+            subject=subject,
         )
 
         if policy_kwargs is None:
@@ -1144,6 +1146,7 @@ class SAC(BaseAgent):
             experiment_dir=experiment_dir,
             checkpoint_dir=checkpoint_dir,
             timestamp=timestamp,
+            subject=getattr(args, "subject", ""),
         )
 
         return cls(**sac_kwargs)

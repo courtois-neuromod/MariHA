@@ -66,7 +66,12 @@ def build_eval_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--experiment_dir",
         default="experiments",
-        help="Root experiments directory (default: experiments).",
+        help="Root experiments directory for logs (default: experiments).",
+    )
+    p.add_argument(
+        "--checkpoint_dir",
+        default=None,
+        help="Root directory for checkpoints. Defaults to --experiment_dir if not set.",
     )
     p.add_argument(
         "--n_episodes",
@@ -129,10 +134,12 @@ def main() -> None:
     args = parser.parse_args()
 
     experiment_dir = Path(args.experiment_dir)
+    _ckpt = getattr(args, "checkpoint_dir", None)
+    checkpoint_root = Path(_ckpt) if _ckpt else experiment_dir
     agent_name = args.agent
     cl_name = args.cl_method
     run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
-    checkpoint_base = experiment_dir / "checkpoints" / run_label
+    checkpoint_base = checkpoint_root / "checkpoints" / args.subject / run_label
 
     task_checkpoints = find_task_checkpoints(checkpoint_base, args.run_prefix)
     if not task_checkpoints:

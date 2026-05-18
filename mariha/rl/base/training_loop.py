@@ -372,10 +372,11 @@ class TrainingLoopRunner:
         from mariha.rl.base.checkpoint import standard_checkpoint_dir
 
         directory = standard_checkpoint_dir(
-            self.agent.experiment_dir,
+            self.agent.checkpoint_dir,
             self.agent.agent_name,
             self.agent.timestamp,
             self._current_task_idx,
+            subject=self.agent.subject,
         )
         directory.mkdir(parents=True, exist_ok=True)
         self.logger.log(
