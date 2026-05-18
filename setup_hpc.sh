@@ -6,9 +6,10 @@
 # The existing Dockerfile and narval_test_sac_cl.sh are unchanged.
 #
 # Usage:
-#   bash setup_hpc.sh               # full setup (prompts for data download path)
-#   bash setup_hpc.sh --no-download # skip datalad download (data pre-staged)
-#   bash setup_hpc.sh --no-scenes   # skip mario.scenes download (already have it)
+#   bash setup_hpc.sh                      # full setup (prompts for data path + SLURM account)
+#   bash setup_hpc.sh --no-download        # skip datalad download (data pre-staged)
+#   bash setup_hpc.sh --no-scenes          # skip mario.scenes download (already have it)
+#   bash setup_hpc.sh --account=def-yourpi # set SLURM allocation non-interactively
 #
 # Assumptions:
 #   - Repo cloned anywhere under $HOME (e.g. ~/projects/MariHA)
@@ -19,9 +20,11 @@ set -euo pipefail
 
 DOWNLOAD_DATA=true
 NO_SCENES=false
+ACCOUNT="${MARIHA_SLURM_ACCOUNT:-}"
 for arg in "$@"; do
   [[ "$arg" == "--no-download" ]] && DOWNLOAD_DATA=false
   [[ "$arg" == "--no-scenes" ]]   && NO_SCENES=true
+  [[ "$arg" == --account=* ]]     && ACCOUNT="${arg#--account=}"
 done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -69,6 +72,18 @@ if [[ "$DOWNLOAD_DATA" == true && -t 0 ]]; then
     info "Data root set to: $MARIHA_DATA_ROOT"
   fi
   mkdir -p "$MARIHA_DATA_ROOT"
+fi
+
+# SLURM allocation account — recorded in the env file so job scripts can
+# self-submit without a hardcoded account.
+if [[ -z "$ACCOUNT" && -t 0 ]]; then
+  echo ""
+  read -rp "$(echo -e "${CYAN}[setup_hpc]${NC}") SLURM account (e.g. def-yourpi), Enter to skip: " ACCOUNT
+fi
+if [[ -n "$ACCOUNT" ]]; then
+  info "SLURM account = $ACCOUNT"
+else
+  warn "No SLURM account set — re-run with --account=def-yourpi, or pass --account to sbatch."
 fi
 
 # ---------------------------------------------------------------------------
@@ -258,9 +273,9 @@ success "Smoke test passed."
 # ---------------------------------------------------------------------------
 # 12. Write the HPC environment file
 # ---------------------------------------------------------------------------
-# Job scripts source this file instead of hardcoding modules/paths or relying
-# on ~/.bashrc. Fixed location so any script can find it regardless of where
-# it is submitted from.
+# Job scripts source this file instead of hardcoding modules/paths or
+# requiring shell-profile edits. Fixed location so any script can find it
+# regardless of where it is submitted from.
 ENV_FILE="$HOME/.config/mariha/hpc_env.sh"
 info "Writing HPC environment file → $ENV_FILE"
 mkdir -p "$(dirname "$ENV_FILE")"
@@ -277,6 +292,7 @@ export PYTHONPATH="\$EBROOTOPENCV/lib/python3.12/site-packages:\${PYTHONPATH:-}"
 export MARIHA_REPO="$MARIHA_REPO"
 export MARIHA_DATA_ROOT="$MARIHA_DATA_ROOT"
 export MARIHA_EXPERIMENT_DIR="$MARIHA_EXPERIMENT_DIR"
+export MARIHA_SLURM_ACCOUNT="$ACCOUNT"
 
 source "$MARIHA_REPO/env/bin/activate"
 EOF
@@ -289,10 +305,15 @@ echo ""
 success "Setup complete."
 echo ""
 echo "Environment file written to: $ENV_FILE"
-echo "Job scripts source it automatically — no ~/.bashrc changes needed."
+echo "Job scripts source it automatically."
+if [[ -n "$ACCOUNT" ]]; then
+  echo "SLURM account: $ACCOUNT"
+else
+  warn "No SLURM account recorded — re-run: bash setup_hpc.sh --account=def-yourpi"
+fi
 echo ""
 echo "Submit the full benchmark sweep (150-job array):"
-echo "    cd $MARIHA_REPO && sbatch scripts/hpc_run_all.sh"
+echo "    cd $MARIHA_REPO && ./scripts/hpc_run_all.sh"
 echo ""
 echo "Run a single job interactively (on a GPU node via salloc):"
 echo "    source $ENV_FILE"

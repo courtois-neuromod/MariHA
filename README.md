@@ -253,7 +253,8 @@ elsewhere (e.g. `$SCRATCH/MariHA/data`), set:
 export MARIHA_DATA_ROOT=$SCRATCH/MariHA/data
 ```
 
-This can go in your `~/.bashrc` or at the top of your SLURM job script.
+On HPC, `setup_hpc.sh` bakes this into the generated env file
+(`~/.config/mariha/hpc_env.sh`), so you don't need to set it yourself.
 Without it the code falls back to `<repo>/data/` as before.
 
 ---
