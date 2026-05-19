@@ -16,7 +16,7 @@ END=$(( SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
 
 mapfile -t CHUNK_RUN_IDS < <(sed -n "${START},${END}p" "$JOB_LIST")
 
-echo "=== Task ${SLURM_ARRAY_TASK_ID}: $RUN_LABEL | $RUN_PREFIX | ${#CHUNK_RUN_IDS[@]} run_ids (lines ${START}-${END}) ==="
+echo "=== Task ${SLURM_ARRAY_TASK_ID}: $SUBJECT | $RUN_LABEL | $RUN_PREFIX | ${#CHUNK_RUN_IDS[@]} run_ids (lines ${START}-${END}) ==="
 
 module load StdEnv/2023 python/3.12 cmake gcc opencv/4.13.0
 export PYTHONPATH="$EBROOTOPENCV/lib/python3.12/site-packages:${PYTHONPATH:-}"

@@ -144,7 +144,7 @@ for rl_dir in "$CHECKPOINT_ROOT/${AGENT}" "$CHECKPOINT_ROOT/${AGENT}_"*/; do
             continue
         fi
 
-        JOB_NAME="bk2-${run_label}"
+        JOB_NAME="bk2-${SUBJECT}-${run_label}"
         sbatch \
             --job-name="$JOB_NAME" \
             --array="1-${N_CHUNKS}" \
