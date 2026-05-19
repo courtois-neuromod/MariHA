@@ -123,7 +123,7 @@ def main() -> None:
     agent_name = args.agent
     cl_name = args.cl_method
     run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
-    checkpoint_base = experiment_dir / "checkpoints" / run_label
+    checkpoint_base = experiment_dir / "checkpoints" / args.subject / run_label
 
     # ------------------------------------------------------------------ #
     # 1. Load curriculum → validate run_id, compute run_index              #
