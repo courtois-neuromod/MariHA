@@ -1,6 +1,7 @@
 #!/bin/bash
 # Submit a BK2-generation array job for ONE trained combo: an agent, a
-# subject, and an optional CL method. Each array task handles one BIDS run.
+# subject, and an optional CL method. Each array task handles one BIDS session
+# (replaying all its runs and writing that session's gamelogs.tar).
 #
 # Called automatically by hpc_run_all.sh after a training task succeeds, and
 # usable by hand. The run_prefix is discovered from the checkpoints written by
@@ -56,31 +57,30 @@ if [[ -z "$RUN_PREFIX" ]]; then
 fi
 [[ -n "$RUN_PREFIX" ]] || { echo "ERROR: could not determine run_prefix in $CKPT_DIR" >&2; exit 1; }
 
-# Collect this subject's run_ids (chronological), one per line, for the array.
+# Collect this subject's sessions, one per line, for the array. Each task
+# replays a whole session and is the sole writer of that session's gamelogs.tar.
 SCENES_SUBJ="$DATA_ROOT/mario.scenes/$SUBJECT"
 [[ -d "$SCENES_SUBJ" ]] || { echo "ERROR: subject data not found: $SCENES_SUBJ" >&2; exit 1; }
-mapfile -t RUN_IDS < <(
+mapfile -t SESSIONS < <(
     find "$SCENES_SUBJ" -name "*_desc-scenes_events.tsv" \
-        | grep -oP 'ses-\d+_.*_run-\d+' \
-        | sed 's/_task-mario//' \
+        | grep -oP 'ses-[0-9]+' \
         | sort -u
 )
-if [[ ${#RUN_IDS[@]} -eq 0 ]]; then
-    echo "ERROR: no run_ids found under $SCENES_SUBJ" >&2
+if [[ ${#SESSIONS[@]} -eq 0 ]]; then
+    echo "ERROR: no sessions found under $SCENES_SUBJ" >&2
     exit 1
 fi
 
 mkdir -p "$REPO/logs"
 JOB_LIST="$(mktemp "$REPO/logs/bk2_${run_label}_${SUBJECT}_XXXX.txt")"
-printf "%s\n" "${RUN_IDS[@]}" > "$JOB_LIST"
+printf "%s\n" "${SESSIONS[@]}" > "$JOB_LIST"
 
 SBATCH_ARGS=()
 [[ -n "${MARIHA_SLURM_ACCOUNT:-}" ]] && SBATCH_ARGS+=(--account="$MARIHA_SLURM_ACCOUNT")
 
-sbatch "${SBATCH_ARGS[@]}" \
+ARRAY_JOB_ID=$(sbatch --parsable "${SBATCH_ARGS[@]}" \
     --job-name="bk2-${run_label}-${SUBJECT}" \
-    --array="1-${#RUN_IDS[@]}" \
+    --array="1-${#SESSIONS[@]}" \
     --export="ALL,JOB_LIST=$JOB_LIST,SUBJECT=$SUBJECT,AGENT=$AGENT,CL_METHOD=$CL_METHOD,RUN_PREFIX=$RUN_PREFIX" \
-    "$REPO/scripts/bk2_worker.sbatch"
-
-echo "Submitted BK2 array (${#RUN_IDS[@]} tasks): $run_label | $SUBJECT | $RUN_PREFIX"
+    "$REPO/scripts/bk2_worker.sbatch")
+echo "Submitted BK2 array (${#SESSIONS[@]} sessions, job $ARRAY_JOB_ID): $run_label | $SUBJECT | $RUN_PREFIX"

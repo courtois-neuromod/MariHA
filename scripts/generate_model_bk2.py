@@ -1,16 +1,17 @@
 #!/usr/bin/env python
-"""Generate model BK2 replay files for one BIDS run after continual learning.
+"""Generate model BK2 replay files for one BIDS session after continual learning.
 
-For a given human run (``run_id``) and a trained model (``run_prefix``), this
-script loads the checkpoint saved right after the model trained on that run
-(``task_idx == run_index``) and plays one greedy episode per clip in that run.
+For a given subject session and a trained model (``run_prefix``), this script
+replays every clip of every run in that session. Each run is replayed with the
+checkpoint saved right after the model finished training on that run
+(``task_idx == run_index``), playing one greedy episode per clip.
 
 Design notes
 ------------
 * **Greedy policy.** Actions are sampled with ``deterministic=True``.
-* **Checkpoint matched to the clip.** The checkpoint used is the one saved
-  immediately after the model finished training on the clip's own
-  sub/ses/run — so model and human are directly comparable on that run.
+* **Checkpoint matched to the run.** Each run is replayed with the checkpoint
+  saved immediately after the model trained on that run — so model and human
+  are directly comparable on every run.
 * **No human frame budget.** The episode is *not* truncated at the human's
   clip length; the model plays until it naturally clears the scene or dies.
   ``--max_episode_steps`` is only a large safety cap against infinite loops.
@@ -18,23 +19,24 @@ Design notes
   the training run's ``config.json`` so the network matches the checkpoint
   exactly; CLI agent flags are only a fallback when that file is missing.
 
-Output is a minimal-BIDS dataset, one per agent/CL-method combo::
+Output mirrors the ``mario.scenes`` layout — one ``gamelogs.tar`` per session::
 
     {MARIHA_DATA_ROOT}/mario.scenes.{agent}-{cl_method|vanilla}/
-        sub-XX/ses-XXX/gamelogs/sub-XX_ses-XXX_task-mario_run-NN_..._clip-CCCC.bk2
+        sub-XX/ses-XXX/gamelogs.tar   (members: gamelogs/..._clip-CCCC.bk2)
 
-Once the final run of a session has been generated, the session's
-``gamelogs/`` folder is collapsed into a single ``{sub}_{ses}_gamelogs.tar``
-archive (and the loose ``.bk2`` files removed) so the dataset does not
-accumulate thousands of tiny files. Clips that failed to generate are simply
-absent from the archive.
+One invocation handles one whole session and is the *sole* writer of that
+session's ``gamelogs.tar``. The SLURM array runs one task per session, so
+different tasks only ever touch different files: there is never a concurrent
+writer, no per-run intermediate archives, and no separate consolidation step.
+The tar is written atomically (temp file + rename), so it is never observed
+half-written even if the task is killed.
 
 Usage::
 
     python scripts/generate_model_bk2.py \\
         --subject sub-01 --agent dqn --cl_method packnet \\
         --run_prefix 2026_05_04__13_15_00_seed0 \\
-        --run_id ses-001_run-02 \\
+        --session ses-001 \\
         --experiment_dir $SCRATCH/MariHA/experiments
 """
 
@@ -47,6 +49,7 @@ import logging
 import os
 import shutil
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -70,7 +73,7 @@ DEFAULT_MAX_EPISODE_STEPS = 50_000
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Generate model BK2 replay files for one BIDS run."
+        description="Generate model BK2 replay files for one BIDS session."
     )
     p.add_argument("--subject", required=True, help="Subject ID, e.g. sub-01.")
     p.add_argument("--agent", default="sac", help="Agent name (from registry).")
@@ -85,9 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run prefix, e.g. '2026_05_04__13_15_00_seed0'.",
     )
     p.add_argument(
-        "--run_id",
+        "--session",
         required=True,
-        help="BIDS run to generate BK2s for, e.g. 'ses-001_run-02'.",
+        help="BIDS session to generate BK2s for, e.g. 'ses-001'.",
     )
     p.add_argument(
         "--experiment_dir",
@@ -116,6 +119,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--num_heads", type=int, default=1)
     p.add_argument("--hide_task_id", action="store_true")
     return p
+
+
+def _resolve_bids_root(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> Path:
+    """Resolve the output dataset root: mario.scenes.{agent}-{cl|vanilla}."""
+    if args.bids_root:
+        return Path(args.bids_root)
+    data_root = os.environ.get("MARIHA_DATA_ROOT")
+    if not data_root:
+        parser.error("Pass --bids_root or set MARIHA_DATA_ROOT.")
+    combo = (
+        f"{args.agent}-{args.cl_method}" if args.cl_method else f"{args.agent}-vanilla"
+    )
+    return Path(data_root) / f"mario.scenes.{combo}"
 
 
 def _load_train_config(
@@ -155,181 +173,91 @@ def _build_agent(agent_name: str, checkpoint_dir: Path, env, run_ids: list,
     return agent
 
 
-def _bids_bk2_path(bids_root: Path, spec) -> Path:
-    """Return the minimal-BIDS path for a clip's model BK2.
+def _bk2_filename(spec) -> str:
+    """Return the BIDS-style ``.bk2`` filename for a clip's model replay.
 
-    Layout: ``{bids_root}/{sub}/{ses}/gamelogs/{sub}_{ses}_task-mario_run-NN
-    _level-L_scene-S_clip-CCCC.bk2``.
+    Pattern: ``{sub}_{ses}_task-mario_run-NN_level-L_scene-S_clip-CCCC.bk2``.
     """
-    sub = spec.subject               # 'sub-01'
-    ses = spec.session               # 'ses-002'
     run = spec.run_id.split("run-")[-1]
     scene_num = int(spec.scene_id.split("s")[-1])
-    fname = (
-        f"{sub}_{ses}_task-mario_run-{run}"
+    return (
+        f"{spec.subject}_{spec.session}_task-mario_run-{run}"
         f"_level-{spec.level}_scene-{scene_num}_clip-{spec.clip_code}.bk2"
     )
-    return bids_root / sub / ses / "gamelogs" / fname
 
 
 def _session_archive_path(bids_root: Path, subject: str, session: str) -> Path:
-    """Return the path of a session's collapsed ``gamelogs/`` archive."""
-    return bids_root / subject / session / f"{subject}_{session}_gamelogs.tar"
+    """Return a session's ``gamelogs`` tar.
 
-
-def _archive_session(bids_root: Path, subject: str, session: str) -> None:
-    """Collapse a session's ``gamelogs/`` folder into a single tar archive.
-
-    Called once the session's final run has been generated. The loose
-    ``.bk2`` files are packed into ``{sub}_{ses}_gamelogs.tar`` and the folder
-    removed. Clips that failed to generate are simply absent from the archive.
-    An uncompressed ``.tar`` is used for consistency with the ``mario.scenes``
-    source dataset.
+    Mirrors the ``mario.scenes`` layout: ``{bids_root}/{sub}/{ses}/gamelogs.tar``.
     """
-    gamelogs_dir = bids_root / subject / session / "gamelogs"
-    if not gamelogs_dir.is_dir():
-        return
-    archive_path = _session_archive_path(bids_root, subject, session)
-    base = str(archive_path).removesuffix(".tar")
-    shutil.make_archive(base, "tar", root_dir=str(gamelogs_dir))
-    shutil.rmtree(gamelogs_dir)
-    logger.info("Session %s archived → %s", session, archive_path)
+    return bids_root / subject / session / "gamelogs.tar"
 
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+def _pack_gamelogs(staging: Path, archive: Path) -> None:
+    """Pack a session's staged ``gamelogs/`` folder into its tar archive.
 
-    experiment_dir = Path(args.experiment_dir)
-    agent_name = args.agent
-    cl_name = args.cl_method
-    run_label = f"{agent_name}_{cl_name}" if cl_name else agent_name
+    Written to a PID-suffixed temp file and atomically ``os.replace``-d into
+    place, so ``gamelogs.tar`` is never observed half-written even if the task
+    is killed mid-write. An uncompressed ``.tar`` keeps consistency with the
+    ``mario.scenes`` source dataset.
+    """
+    tmp = archive.with_name(f"{archive.name}.tmp.{os.getpid()}")
+    try:
+        with tarfile.open(tmp, "w") as tar:
+            tar.add(staging, arcname="gamelogs")
+        os.replace(tmp, archive)
+    finally:
+        tmp.unlink(missing_ok=True)
 
-    # Resolve the output BIDS dataset root: mario.scenes.{agent}-{cl|vanilla}.
-    combo = f"{agent_name}-{cl_name}" if cl_name else f"{agent_name}-vanilla"
-    if args.bids_root:
-        bids_root = Path(args.bids_root)
-    else:
-        data_root = os.environ.get("MARIHA_DATA_ROOT")
-        if not data_root:
-            parser.error("Pass --bids_root or set MARIHA_DATA_ROOT.")
-        bids_root = Path(data_root) / f"mario.scenes.{combo}"
 
-    # ------------------------------------------------------------------ #
-    # 1. Load curriculum → validate run_id, compute run_index              #
-    # ------------------------------------------------------------------ #
-    sequence = HumanSequence(subject_id=args.subject)
-    run_ids = sequence.run_ids
+def _generate_run(
+    *, run_id: str, run_specs: list, run_ids: list, checkpoint_dir: Path,
+    agent_name: str, train_args: argparse.Namespace, scene_meta: dict,
+    staging: Path, max_episode_steps: int,
+) -> int:
+    """Replay every clip of one run into ``staging``. Returns the clip count.
 
-    if args.run_id not in run_ids:
-        logger.error(
-            "run_id '%s' not found in curriculum for subject '%s'.",
-            args.run_id, args.subject,
-        )
-        sys.exit(1)
-
-    run_index = run_ids.index(args.run_id)
-    run_specs = [s for s in sequence if s.run_id == args.run_id]
-
-    if not run_specs:
-        logger.error("No episode specs found for run_id '%s'.", args.run_id)
-        sys.exit(1)
-
-    logger.info(
-        "Run '%s' → run_index=%d, %d clips", args.run_id, run_index, len(run_specs)
-    )
-
-    # If this run's session was already collapsed into an archive, there is
-    # nothing to (re)generate — bail out before loading the checkpoint.
-    session = run_specs[0].session
-    archive_path = _session_archive_path(bids_root, args.subject, session)
-    if archive_path.exists():
-        logger.info(
-            "Session %s already archived (%s) — nothing to do.",
-            session, archive_path,
-        )
-        return
-
-    # ------------------------------------------------------------------ #
-    # 2. Locate checkpoint (subject-namespaced, matched to this run)       #
-    # ------------------------------------------------------------------ #
-    checkpoint_dir = (
-        experiment_dir
-        / "checkpoints"
-        / run_label
-        / args.subject
-        / f"{args.run_prefix}_task{run_index}"
-    )
-    if not checkpoint_dir.exists():
-        logger.error("Checkpoint directory not found: %s", checkpoint_dir)
-        sys.exit(1)
-
-    logger.info("Checkpoint: %s", checkpoint_dir)
-
-    # ------------------------------------------------------------------ #
-    # 3. Output directory (minimal-BIDS dataset for this combo)            #
-    # ------------------------------------------------------------------ #
-    logger.info("Output dataset: %s", bids_root)
-
-    # ------------------------------------------------------------------ #
-    # 4. Rebuild the agent from the training run's config, load checkpoint #
-    # stable-retro allows only one emulator per process; the dummy env     #
-    # must be closed before the per-clip recording envs are opened.        #
-    # ------------------------------------------------------------------ #
-    train_args = _load_train_config(
-        experiment_dir, args.subject, run_label, args.run_prefix, fallback=args,
-    )
-
-    scene_meta = load_metadata(SCENARIOS_DIR)
+    stable-retro allows only one emulator per process, so the dummy env used
+    to build the agent is closed before any per-clip recording env is opened,
+    and each recording env is closed before the next.
+    """
     first_spec = run_specs[0]
     first_exit = scene_meta[first_spec.scene_id]["exit_point"]
-
     dummy_env = make_scene_env(
         scene_id=first_spec.scene_id,
         exit_point=first_exit,
-        run_id=args.run_id,
+        run_id=run_id,
         run_ids=run_ids,
     )
     try:
-        agent = _build_agent(agent_name, checkpoint_dir, dummy_env, run_ids, train_args)
+        agent = _build_agent(
+            agent_name, checkpoint_dir, dummy_env, run_ids, train_args
+        )
     finally:
         dummy_env.close()
 
-    # ------------------------------------------------------------------ #
-    # 5. Generate one BK2 per clip — greedy policy, no human frame budget  #
-    # ------------------------------------------------------------------ #
     n_generated = 0
     for i, spec in enumerate(run_specs):
-        final_path = _bids_bk2_path(bids_root, spec)
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if final_path.exists():
-            logger.info(
-                "[%d/%d] Already exists, skipping: %s",
-                i + 1, len(run_specs), final_path.name,
-            )
-            n_generated += 1
-            continue
-
         logger.info(
-            "[%d/%d] clip=%s scene=%s",
+            "  [%d/%d] clip=%s scene=%s",
             i + 1, len(run_specs), spec.clip_code, spec.scene_id,
         )
 
         # Lift the human-derived frame budget: the model plays to natural
         # termination (scene cleared or death), capped only for safety.
-        play_spec = dataclasses.replace(spec, max_steps=args.max_episode_steps)
+        play_spec = dataclasses.replace(spec, max_steps=max_episode_steps)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
+        with tempfile.TemporaryDirectory() as rec_dir:
+            rec_path = Path(rec_dir)
             exit_point = scene_meta[spec.scene_id]["exit_point"]
 
             env = make_scene_env(
                 scene_id=spec.scene_id,
                 exit_point=exit_point,
-                run_id=args.run_id,
+                run_id=run_id,
                 run_ids=run_ids,
-                record_dir=tmpdir_path,
+                record_dir=rec_path,
             )
             try:
                 obs, info = env.reset(episode_spec=play_spec)
@@ -343,27 +271,128 @@ def main() -> None:
                 env.unwrapped.stop_record()
                 env.close()
 
-            bk2_files = list(tmpdir_path.glob("*.bk2"))
+            bk2_files = list(rec_path.glob("*.bk2"))
             if not bk2_files:
-                logger.warning("No BK2 produced for clip %s — skipping.", spec.clip_code)
+                logger.warning("  No BK2 produced for clip %s — skipping.", spec.clip_code)
                 continue
             if len(bk2_files) > 1:
                 logger.warning(
-                    "Multiple BK2 files found for clip %s; using first.", spec.clip_code
+                    "  Multiple BK2 files found for clip %s; using first.", spec.clip_code
                 )
 
-            shutil.move(str(bk2_files[0]), str(final_path))
-            logger.info("  -> %s", final_path.name)
+            shutil.move(str(bk2_files[0]), str(staging / _bk2_filename(spec)))
             n_generated += 1
 
-    # ------------------------------------------------------------------ #
-    # 6. Collapse the session's gamelogs/ folder once its last run is done #
-    # ------------------------------------------------------------------ #
-    session_run_ids = [r for r in run_ids if r.split("_run-")[0] == session]
-    if args.run_id == session_run_ids[-1]:
-        _archive_session(bids_root, args.subject, session)
+    return n_generated
 
-    print(f"\nDone. {n_generated}/{len(run_specs)} BK2 files generated in:\n  {bids_root}")
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    bids_root = _resolve_bids_root(args, parser)
+    experiment_dir = Path(args.experiment_dir)
+    run_label = (
+        f"{args.agent}_{args.cl_method}" if args.cl_method else args.agent
+    )
+
+    # ------------------------------------------------------------------ #
+    # 1. Load curriculum → the runs that make up this session              #
+    # ------------------------------------------------------------------ #
+    sequence = HumanSequence(subject_id=args.subject)
+    run_ids = sequence.run_ids
+    session_run_ids = [r for r in run_ids if r.split("_run-")[0] == args.session]
+
+    if not session_run_ids:
+        logger.error(
+            "Session '%s' not found in curriculum for subject '%s'.",
+            args.session, args.subject,
+        )
+        sys.exit(1)
+
+    session_archive = _session_archive_path(bids_root, args.subject, args.session)
+    if session_archive.exists():
+        logger.info(
+            "Session %s already archived (%s) — nothing to do.",
+            args.session, session_archive,
+        )
+        return
+
+    logger.info(
+        "Session %s → %d runs; output dataset %s",
+        args.session, len(session_run_ids), bids_root,
+    )
+
+    # ------------------------------------------------------------------ #
+    # 2. Replay every clip of every run into one staging folder            #
+    # ------------------------------------------------------------------ #
+    train_args = _load_train_config(
+        experiment_dir, args.subject, run_label, args.run_prefix, fallback=args,
+    )
+    scene_meta = load_metadata(SCENARIOS_DIR)
+
+    session_archive.parent.mkdir(parents=True, exist_ok=True)
+    n_generated = 0
+    n_clips = 0
+    with tempfile.TemporaryDirectory() as staging_root:
+        staging = Path(staging_root) / "gamelogs"
+        staging.mkdir()
+
+        for run_id in session_run_ids:
+            run_index = run_ids.index(run_id)
+            run_specs = [s for s in sequence if s.run_id == run_id]
+            n_clips += len(run_specs)
+
+            # Checkpoint saved right after the model trained on this run.
+            checkpoint_dir = (
+                experiment_dir / "checkpoints" / run_label / args.subject
+                / f"{args.run_prefix}_task{run_index}"
+            )
+            if not checkpoint_dir.exists():
+                logger.error(
+                    "Run %s: checkpoint not found (%s) — skipping this run.",
+                    run_id, checkpoint_dir,
+                )
+                continue
+
+            logger.info(
+                "Run %s (task %d, %d clips) — checkpoint %s",
+                run_id, run_index, len(run_specs), checkpoint_dir.name,
+            )
+            n = _generate_run(
+                run_id=run_id,
+                run_specs=run_specs,
+                run_ids=run_ids,
+                checkpoint_dir=checkpoint_dir,
+                agent_name=args.agent,
+                train_args=train_args,
+                scene_meta=scene_meta,
+                staging=staging,
+                max_episode_steps=args.max_episode_steps,
+            )
+            logger.info("Run %s: %d/%d clips generated.", run_id, n, len(run_specs))
+            n_generated += n
+
+        # ----------------------------------------------------------- #
+        # 3. Pack the whole session into gamelogs.tar in one atomic    #
+        #    write — this task is the only writer of that file.        #
+        # ----------------------------------------------------------- #
+        if n_generated == 0:
+            logger.warning(
+                "Session %s: no BK2 generated — gamelogs.tar not written.",
+                args.session,
+            )
+        else:
+            _pack_gamelogs(staging, session_archive)
+            logger.info(
+                "Session %s archived → %s (%d clips)",
+                args.session, session_archive, n_generated,
+            )
+
+    print(
+        f"\nDone. {n_generated}/{n_clips} BK2 files generated for session "
+        f"'{args.session}'."
+    )
 
 
 if __name__ == "__main__":
