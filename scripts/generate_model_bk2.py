@@ -21,7 +21,13 @@ Design notes
 Output is a minimal-BIDS dataset, one per agent/CL-method combo::
 
     {MARIHA_DATA_ROOT}/mario.scenes.{agent}-{cl_method|vanilla}/
-        sub-XX/ses-XXX/func/sub-XX_ses-XXX_task-mario_run-NN_..._clip-CCCC.bk2
+        sub-XX/ses-XXX/gamelogs/sub-XX_ses-XXX_task-mario_run-NN_..._clip-CCCC.bk2
+
+Once the final run of a session has been generated, the session's
+``gamelogs/`` folder is collapsed into a single ``{sub}_{ses}_gamelogs.tar``
+archive (and the loose ``.bk2`` files removed) so the dataset does not
+accumulate thousands of tiny files. Clips that failed to generate are simply
+absent from the archive.
 
 Usage::
 
@@ -152,7 +158,7 @@ def _build_agent(agent_name: str, checkpoint_dir: Path, env, run_ids: list,
 def _bids_bk2_path(bids_root: Path, spec) -> Path:
     """Return the minimal-BIDS path for a clip's model BK2.
 
-    Layout: ``{bids_root}/{sub}/{ses}/func/{sub}_{ses}_task-mario_run-NN
+    Layout: ``{bids_root}/{sub}/{ses}/gamelogs/{sub}_{ses}_task-mario_run-NN
     _level-L_scene-S_clip-CCCC.bk2``.
     """
     sub = spec.subject               # 'sub-01'
@@ -163,7 +169,31 @@ def _bids_bk2_path(bids_root: Path, spec) -> Path:
         f"{sub}_{ses}_task-mario_run-{run}"
         f"_level-{spec.level}_scene-{scene_num}_clip-{spec.clip_code}.bk2"
     )
-    return bids_root / sub / ses / "func" / fname
+    return bids_root / sub / ses / "gamelogs" / fname
+
+
+def _session_archive_path(bids_root: Path, subject: str, session: str) -> Path:
+    """Return the path of a session's collapsed ``gamelogs/`` archive."""
+    return bids_root / subject / session / f"{subject}_{session}_gamelogs.tar"
+
+
+def _archive_session(bids_root: Path, subject: str, session: str) -> None:
+    """Collapse a session's ``gamelogs/`` folder into a single tar archive.
+
+    Called once the session's final run has been generated. The loose
+    ``.bk2`` files are packed into ``{sub}_{ses}_gamelogs.tar`` and the folder
+    removed. Clips that failed to generate are simply absent from the archive.
+    An uncompressed ``.tar`` is used for consistency with the ``mario.scenes``
+    source dataset.
+    """
+    gamelogs_dir = bids_root / subject / session / "gamelogs"
+    if not gamelogs_dir.is_dir():
+        return
+    archive_path = _session_archive_path(bids_root, subject, session)
+    base = str(archive_path).removesuffix(".tar")
+    shutil.make_archive(base, "tar", root_dir=str(gamelogs_dir))
+    shutil.rmtree(gamelogs_dir)
+    logger.info("Session %s archived → %s", session, archive_path)
 
 
 def main() -> None:
@@ -208,6 +238,17 @@ def main() -> None:
     logger.info(
         "Run '%s' → run_index=%d, %d clips", args.run_id, run_index, len(run_specs)
     )
+
+    # If this run's session was already collapsed into an archive, there is
+    # nothing to (re)generate — bail out before loading the checkpoint.
+    session = run_specs[0].session
+    archive_path = _session_archive_path(bids_root, args.subject, session)
+    if archive_path.exists():
+        logger.info(
+            "Session %s already archived (%s) — nothing to do.",
+            session, archive_path,
+        )
+        return
 
     # ------------------------------------------------------------------ #
     # 2. Locate checkpoint (subject-namespaced, matched to this run)       #
@@ -314,6 +355,13 @@ def main() -> None:
             shutil.move(str(bk2_files[0]), str(final_path))
             logger.info("  -> %s", final_path.name)
             n_generated += 1
+
+    # ------------------------------------------------------------------ #
+    # 6. Collapse the session's gamelogs/ folder once its last run is done #
+    # ------------------------------------------------------------------ #
+    session_run_ids = [r for r in run_ids if r.split("_run-")[0] == session]
+    if args.run_id == session_run_ids[-1]:
+        _archive_session(bids_root, args.subject, session)
 
     print(f"\nDone. {n_generated}/{len(run_specs)} BK2 files generated in:\n  {bids_root}")
 
